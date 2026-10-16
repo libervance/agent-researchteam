@@ -16,16 +16,17 @@ $common = @('HermesEasySetup.ps1','VERSION','LICENSE','README.md','SECURITY.md',
     'src/HermesEasySetup.Loader.psm1','src/HermesEasySetup.Core.psm1','src/HermesEasySetup.Preflight.psm1','src/HermesEasySetup.StateStore.psm1',
     'src/HermesEasySetup.Execution.psm1','src/HermesEasySetup.Protocol.psm1','src/HermesEasySetup.InstallEngine.psm1','src/HermesEasySetup.Existing.psm1','src/HermesEasySetup.Codex.psm1',
     'src/HermesEasySetup.Lab.psm1','src/HermesEasySetup.Mattermost.psm1','src/HermesEasySetup.Docker.psm1','src/HermesEasySetup.Admin.psm1','src/HermesEasySetup.AdminBots.ps1','src/HermesEasySetup.AdminNetwork.ps1','src/HermesEasySetup.Research.psm1','src/HermesEasySetup.ResearchRuntime.psm1','src/HermesEasySetup.ResearchGovernance.ps1','src/HermesEasySetup.Bundle.psm1',
-    'src/HermesEasySetup.ResearchDefaults.ps1','src/HermesEasySetup.ResearchMigration.ps1',
+    'src/HermesEasySetup.ResearchDefaults.ps1','src/HermesEasySetup.ResearchMigration.ps1','src/HermesEasySetup.ResearchGateway.ps1',
     'docs/installation-guide.ko.md','docs/admin-guide.ko.md','docs/two-pc-checklist.ko.md','docs/recovery-guide.ko.md','docs/admin-step5-validation.ko.md')
 $package = & (Get-Module HermesEasySetup.Admin) { Get-HermesAdminBotControlPackage }
+# The research team payload is exactly what team/manifest.json lists (the installer re-checks every hash).
+$teamManifest = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'team\manifest.json'), [Text.Encoding]::UTF8) | ConvertFrom-Json
+$teamFiles = @('team/manifest.json') + @($teamManifest.files.PSObject.Properties.Name | ForEach-Object { 'team/' + $_ })
 $roles = @(
     @{ Name = 'User'; Entry = 'Start-HermesEasySetup.cmd'; Files = @('Start-HermesEasySetup.cmd','HermesEasySetup.Gui.ps1','ui/MainWindow.xaml') },
     @{ Name = 'Admin'; Entry = 'Start-HermesAdminSetup.cmd'; Files = @('Start-HermesAdminSetup.cmd','HermesAdminSetup.Gui.ps1','ui/AdminWindow.xaml',('assets/bot-control/' + $package.Pin.file)) },
     @{ Name = 'Research'; Entry = 'Start-HermesResearchSetup.cmd'; Files = @('Start-HermesResearchSetup.cmd','HermesResearchSetup.Gui.ps1','ui/ResearchWindow.xaml','docs/research-guide.ko.md',
-        'assets/research-prompts/manager.txt','assets/research-prompts/researcher.txt','assets/research-prompts/analyst.txt','assets/research-prompts/auditor.txt',
-        'engine/research_team/__init__.py','engine/research_team/policy.py','engine/research_team/broker.py','engine/research_team/hermes_worker.py',
-        'engine/research_team/workflow.py','engine/research_team/web_tools.py','engine/research_team/native_cutover.py','engine/research_team/profile_config.py','engine/research_team/report_docx.py') }
+        'docs/research-team.md') + $teamFiles }
 )
 $plans = @()
 foreach ($role in $roles) {
@@ -74,7 +75,7 @@ foreach ($plan in $plans) {
         }
         Add-ZipText $archive ($plan.Name + '/FILES.sha256') (($manifest -join "`n") + "`n")
         $purpose = $(if ($plan.Role -ceq 'Research') {
-            "개인 연구실용입니다. 현재 Windows PC에 로컬 서버·Hermes·에이전트 4개를 구성합니다.`n안내: docs/research-guide.ko.md`n설치 중 실제 모델·검색·원문·네 역할·감사 테스트를 모두 통과해야 사용 준비 완료로 표시합니다.`n"
+            "개인 연구실용입니다. 현재 Windows PC에 로컬 서버·Hermes·논문·보고서 연구팀 에이전트 5개를 구성합니다.`n안내: docs/research-guide.ko.md`n설치 중 다섯 역할이 실제 모델·봇으로 작은 작업을 하고 결과 전달·기록까지 확인해야 사용 준비 완료로 표시합니다.`n"
         } else {
             "관리자용은 서버 PC, 사용자용은 각 연구원 PC에서 실행합니다.`n두 PC 실사용 점검: docs/two-pc-checklist.ko.md`n"
         })

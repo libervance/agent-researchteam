@@ -28,9 +28,10 @@ Hermes Easy Setup은 Hermes 설치 로직을 다시 구현하지 않습니다. �
 | `src/HermesEasySetup.Mattermost.psm1` | Desktop 감지, 고정 공식 MSI 검증·설치, 버전별 서버 목록 병합·백업, 서버 ping |
 | `src/HermesEasySetup.Docker.psm1` | 전체/사용자별 Docker 설치 감지, PC 조건·엔진 상태, 승인된 고정 다운로드·서명 검증·설치 후 재확인 |
 | `HermesAdminSetup.Gui.ps1` | 별도 서버·관리자·Bot Control 설정, 봇 생성 동의·결과 복사 |
-| `HermesResearchSetup.Gui.ps1` | 로컬 서버 → Hermes·모델 → 네 에이전트 한 페이지, 역할 편집·기존 배정 복원 |
-| `src/HermesEasySetup.Research.psm1` | 네 역할·예약 프로필 입력 계약, 비밀값 없는 역할 템플릿 저장 |
-| `src/HermesEasySetup.ResearchRuntime.psm1` | 로컬 봇·채널 사전 검사, 네 프로필·SOUL·로그인 Gateway Task, 소유 기반 재설정 |
+| `HermesResearchSetup.Gui.ps1` | 로컬 서버 → Hermes·모델 → 다섯 에이전트 한 페이지(봇·모델 라우터/Codex·작업 설정), 저장된 팀 복원 |
+| `src/HermesEasySetup.Research.psm1` | 다섯 역할 정의, 팀·모델 입력 계약(비밀값 없는 요약), `team/` 구성 파일의 SHA-256 검증 |
+| `src/HermesEasySetup.ResearchRuntime.psm1` | 봇·채널·요청자 사전 검사, 소유 확인·이전 팀 전환, 설치 순서, 실제 다섯 역할 테스트 (Governance: 프로필·작업 폴더·서비스 Task, Gateway: 모델 라우터, Migration: 이전 분배 서비스 정지·백업) |
+| `team/` | 연구팀 자체: 역할별 `SOUL.md`·스킬·설정, 작업 보드 실행기(`shared/research_board.py`), 팀 서비스, 설치 테스트, 모델 라우터(`gateway/`), 논문·보고서 템플릿. 구조는 [research-team.md](research-team.md) |
 | `src/HermesEasySetup.Admin.psm1` | 고정 로컬 Docker, 배포 소유권·관리자 검증, Compose 전환 기록 |
 | `src/HermesEasySetup.AdminBots.ps1` | Admin 모듈 내부 봇 생성·멤버십·토큰 DPAPI 보관·재시도·생성 설정 복구 |
 | `src/HermesEasySetup.Lab.psm1` | 새 프로필 격리, Mattermost 설정, NetBird Dashboard Task, Gateway Task, Bot Control 자동 등록·검증 |
@@ -45,15 +46,15 @@ Hermes Easy Setup은 Hermes 설치 로직을 다시 구현하지 않습니다. �
 
 `Loader.psm1`은 명시된 모듈 경로만 import합니다. compat/initial 구현이나 이름 충돌 override는 배포에 포함하지 않습니다.
 
-## 개인 연구실 초기 버전
+## 개인 연구실
 
-새 진입점은 기존 GUI를 교체하지 않고 관리자 서버·Hermes 설치·Codex 인증 모듈을 재사용합니다. 세 번째 화면에서 네 이름·봇 토큰·역할을 함께 설정합니다. 역할 템플릿과 공개 팀 구성은 RuntimeRoot의 `research` 아래 저장하고 기존 배정을 복원합니다.
+새 진입점은 기존 GUI를 교체하지 않고 관리자 서버·Hermes 설치·Codex 인증 모듈을 재사용합니다. 세 번째 화면에서 다섯 에이전트의 이름·봇 토큰, 모델 연결(라우터 API 키 또는 Codex), 작업 폴더·시간 한도·동시 심사자 수를 함께 설정합니다. 공개 팀 구성은 RuntimeRoot의 `research\team.json`, 봇 토큰은 `research\private`, 공급자 키는 `research\gateway\env`(현재 사용자·SYSTEM만 접근)에 저장하고 다음 실행 때 복원합니다.
 
 첫 화면은 읽기 전용 `DockerStatus`를 조회하고 미설치·미실행·조건 미충족을 구분합니다. 명시적 동의가 있어야 `DockerInstall -Apply` worker에서 고정 공식 설치기를 다운로드·해시·서명 검증 후 실행합니다. 설치 종료 및 재부팅 필요는 Linux 엔진 준비와 별도로 표시합니다. Docker 없는 경로는 안내만 제공하며 다른 환경을 자동 인수하지 않습니다.
 
-Research runtime은 loopback Mattermost의 서로 다른 일반 봇 4개와 채널 접근을 검사하고 기본 프로필을 복제하지 않는 독립 프로필 4개를 만듭니다. SOUL 관리 블록만 수정하며 소유 프로필 재설정 시 기존 메모리·세션을 유지합니다. 토큰은 DPAPI로 전송하지만 실행용 `.env`에는 평문으로 저장됩니다.
+Research runtime은 loopback Mattermost의 서로 다른 일반 봇 5개와 채널 접근, 요청할 사람 계정을 검사하고, `team/manifest.json`과 대조한 구성 파일을 `research\team`에 설치합니다. 기본 프로필을 복제하지 않는 독립 프로필 5개를 만들고(같은 이름의 남의 프로필이 있으면 아무것도 바꾸지 않고 중단), 각 프로필에 SOUL·스킬(Git Bash용 절대 경로로 렌더링)·설정 overlay를 적용합니다. 총괄만 Mattermost 토큰을 `.env`에 갖고, 나머지 네 역할의 토큰과 라우터 비밀값은 팀 서비스만 가집니다.
 
-Gateway만 현재 사용자의 로그인 예약 작업으로 등록합니다. Dashboard·NetBird·Bot Control 등록·자동 업데이트·자동 협업은 이 흐름에서 구성하지 않습니다. 종료 코드만으로 완료하지 않고 각 Gateway의 PID 긍정 상태와 해당 소유 예약 작업 `Running`을 확인합니다. 실제 모델 답변은 사용자의 Mattermost @멘션 점검이 필요합니다.
+로그인 예약 작업은 두 개입니다. `team service`(Python 감독 프로세스)가 모델 라우터와 역할별 실행기를 실행·재시작하고 상태를 `service-status.json`에 남기며, `lead chat`이 총괄의 `hermes gateway run`을 실행합니다. 설치는 두 작업의 실행·라우터 응답·Gateway PID 긍정 상태를 확인한 뒤, 실제 모델·봇으로 다섯 역할이 각각 작은 작업을 하는 테스트(`team_selftest.py`)와 결과 전달·기록 검증을 통과해야 완료로 표시합니다.
 
 ## 승인과 freshness
 

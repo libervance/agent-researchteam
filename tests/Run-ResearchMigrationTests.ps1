@@ -33,7 +33,7 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.Loader.psm1') -Force
         Profiles=@('research-lead','research-scout','research-worker','research-reviewer' | ForEach-Object { [pscustomobject]@{ProfileName=$_;GatewayTask=$null;OwnsProfile=$true} })
     }
     $powershell = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
-    $brokerPlan = Get-HermesResearchTaskPlan -ProfileName 'governed-team' -HermesHome $paths.HermesHome -RuntimeRoot $paths.RuntimeRoot -OwnerSID $owner -TeamID $prior.TeamID -PowerShellPath $powershell
+    $brokerPlan = Get-HermesResearchTaskPlan -ProfileName 'governed-team' -HermesHome $paths.HermesHome -RuntimeRoot $paths.RuntimeRoot -OwnerSID $owner -TeamID $prior.TeamID -PowerShellPath $powershell -Manager $script:ResearchLegacyManager
     $script:taskFixtures = @{}
     $script:disabled = New-Object System.Collections.Generic.List[string]
     $script:stopped = New-Object System.Collections.Generic.List[string]
@@ -98,11 +98,6 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.Loader.psm1') -Force
         $epoch = ([DateTime]::UtcNow - [DateTime]'1970-01-01').TotalSeconds
         $heartbeat = @{prompts_verified=$true;errors=@();updated_at=($epoch+1);pid=$PID;maintenance=$true;active=$false;ready=$true;pending_reasons=@()}
         [IO.File]::WriteAllText((Join-Path $heartbeatRoot 'broker-status.json'),($heartbeat | ConvertTo-Json))
-        $verifiedHeartbeat = Wait-HermesResearchBrokerReady -ResearchRoot $heartbeatRoot -Python $launcher -StartedAt $epoch -TimeoutSeconds 0
-        Assert-Migration ($verifiedHeartbeat.pid -eq $PID -and $processModule -cne $launcher) 'Readiness matches the probed physical module rather than the venv launcher file'
-        $script:processResult.StdOut = $physical
-        Reject-Migration { Wait-HermesResearchBrokerReady -ResearchRoot $heartbeatRoot -Python $launcher -StartedAt $epoch -TimeoutSeconds 0 } 'Heartbeat PID with a different physical process module remains unverified'
-        $script:processResult.StdOut = $processModule
         $script:taskFixtures[$brokerPlan.TaskName] = New-TaskFixture $brokerPlan 'Ready'
         $script:taskFixtures['Hermes_Gateway'] = [pscustomobject]@{TaskName='Hermes_Gateway';State='Running';Enabled=$true}
         $maintenanceTask = [pscustomobject]@{Plan=$brokerPlan;Task=$script:taskFixtures[$brokerPlan.TaskName]}
@@ -166,7 +161,7 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.Loader.psm1') -Force
         Assert-Migration ($empty.Count -eq 0) 'Owned existing native profiles with null GatewayTask need no invented personal task ownership'
         $plans = @($brokerPlan)
         foreach ($profile in $prior.Profiles) {
-            $plans += Get-HermesResearchTaskPlan -ProfileName $profile.ProfileName -HermesHome $paths.HermesHome -RuntimeRoot $paths.RuntimeRoot -OwnerSID $owner -TeamID $prior.TeamID -PowerShellPath $powershell
+            $plans += Get-HermesResearchTaskPlan -ProfileName $profile.ProfileName -HermesHome $paths.HermesHome -RuntimeRoot $paths.RuntimeRoot -OwnerSID $owner -TeamID $prior.TeamID -PowerShellPath $powershell -Manager $script:ResearchLegacyManager
         }
         foreach ($plan in $plans) { $script:taskFixtures[$plan.TaskName] = New-TaskFixture $plan }
         $script:taskFixtures['Hermes_Gateway'] = [pscustomobject]@{TaskName='Hermes_Gateway';State='Running';Enabled=$true}
@@ -214,38 +209,36 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.Loader.psm1') -Force
 
         $testRoot = Join-Path $script:fixtureRoot 'live-fixture'
         New-Item -ItemType Directory -Path $testRoot | Out-Null
-        $valid = [ordered]@{ready=$true;live=$true;audits_verified=$true;search_verified=$true;read_verified=$true;messages_verified=$true;request_id=('req_'+('b'*32));roles_verified=@('manager','researcher','analyst','auditor')}
-        $script:processResult.StdOut = $valid | ConvertTo-Json -Compress
-        $result = Invoke-HermesResearchLiveTest -ResearchRoot $testRoot -Python 'fixture.exe' -Environment @{} -UserID ('h'*26)
-        Assert-Migration (-not $result.Passed) 'Successful process output without persisted live evidence is not ready'
-        [IO.File]::WriteAllText((Join-Path $testRoot 'live-test.json'),'{}')
-        $result = Invoke-HermesResearchLiveTest -ResearchRoot $testRoot -Python 'fixture.exe' -Environment @{} -UserID ('h'*26)
-        Assert-Migration (-not $result.Passed -and $result.ErrorCode -ceq 'LiveTestEvidenceRejected') 'Plausible success output cannot use an empty unrelated evidence file'
-        $stale = @{ready=$true;live=$true;request_id=$valid.request_id;tested_at=1}
-        [IO.File]::WriteAllText((Join-Path $testRoot 'live-test.json'),($stale | ConvertTo-Json))
-        $result = Invoke-HermesResearchLiveTest -ResearchRoot $testRoot -Python 'fixture.exe' -Environment @{} -UserID ('h'*26)
-        Assert-Migration (-not $result.Passed -and $result.ErrorCode -ceq 'LiveTestEvidenceRejected') 'A previous successful test file cannot satisfy this installation run'
-        $stale.tested_at = ([DateTime]::UtcNow - [DateTime]'1970-01-01').TotalSeconds + 5
-        [IO.File]::WriteAllText((Join-Path $testRoot 'live-test.json'),($stale | ConvertTo-Json))
-        $result = Invoke-HermesResearchLiveTest -ResearchRoot $testRoot -Python 'fixture.exe' -Environment @{} -UserID ('h'*26)
-        Assert-Migration (-not $result.Passed -and $result.ErrorCode -ceq 'LiveTestEvidenceRejected') 'Fresh-looking metadata still needs actual broker binding verification'
-        $valid.live = $false; $script:processResult.StdOut = $valid | ConvertTo-Json -Compress
-        $result = Invoke-HermesResearchLiveTest -ResearchRoot $testRoot -Python 'fixture.exe' -Environment @{} -UserID ('h'*26)
-        Assert-Migration (-not $result.Passed -and -not $result.Live) 'Simulated four-role evidence is never treated as a live test'
-        $valid.live = $true; $valid.audits_verified = $false; $script:processResult.StdOut = $valid | ConvertTo-Json -Compress
-        $result = Invoke-HermesResearchLiveTest -ResearchRoot $testRoot -Python 'fixture.exe' -Environment @{} -UserID ('h'*26)
-        Assert-Migration (-not $result.Passed) 'Four roles without audit pass are not ready'
-        $valid.audits_verified = $true; $valid.roles_verified = @('manager','researcher','analyst'); $script:processResult.StdOut = $valid | ConvertTo-Json -Compress
-        $result = Invoke-HermesResearchLiveTest -ResearchRoot $testRoot -Python 'fixture.exe' -Environment @{} -UserID ('h'*26)
-        Assert-Migration (-not $result.Passed) 'Missing auditor result is not ready'
+        $selfTest = { Invoke-HermesResearchSelfTest -ResearchRoot $testRoot -Python 'fixture.exe' -Environment @{} -WorkspacePath $testRoot -ChannelID ('c'*26) -CommandPath 'hermes.exe' -Mention '@fixture' }
+        $valid = [ordered]@{passed=$true;live=$true;folder='C:\ws\_selftest-20261016';ledger_intact=$true;delivered=$true;lead='done';error=$null
+            roles=[ordered]@{'research-librarian'='done';'research-reviewer'='done';'research-writer'='done';'research-experimenter'='done'}}
+        $script:processResult.StdOut = $valid | ConvertTo-Json -Compress -Depth 4
+        $result = & $selfTest
+        Assert-Migration ($result.Passed -and $result.Live -and $result.AuditPassed -and @($result.Roles).Count -eq 5 -and $result.RequestID -ceq '_selftest-20261016') 'Live test passes only with five roles done, delivery and an intact ledger'
+        Assert-Migration ((Test-Path -LiteralPath (Join-Path $testRoot 'live-test.json')) -and ([IO.File]::ReadAllText((Join-Path $testRoot 'live-test.json')) | ConvertFrom-Json).passed -eq $true) 'Live test evidence is kept with the team record'
+        foreach ($case in @(
+            @{ Name = 'a simulated (not live) run'; Change = { $valid.live = $false } },
+            @{ Name = 'a blocked reviewer'; Change = { $valid.roles.'research-reviewer' = 'blocked'; $valid.passed = $false } },
+            @{ Name = 'a lead that did not answer'; Change = { $valid.lead = 'failed (exit 1)' } },
+            @{ Name = 'an unverified delivery'; Change = { $valid.delivered = $false } },
+            @{ Name = 'a broken ledger chain'; Change = { $valid.ledger_intact = $false } }
+        )) {
+            $saved = $valid | ConvertTo-Json -Depth 4
+            & $case.Change
+            $script:processResult.StdOut = $valid | ConvertTo-Json -Compress -Depth 4
+            $result = & $selfTest
+            Assert-Migration (-not $result.Passed) ('Not ready after ' + $case.Name)
+            $valid = $saved | ConvertFrom-Json
+        }
+        $script:processResult.StdOut = $valid | ConvertTo-Json -Compress -Depth 4
         $script:processResult.TimedOut = $true
-        $result = Invoke-HermesResearchLiveTest -ResearchRoot $testRoot -Python 'fixture.exe' -Environment @{} -UserID ('h'*26)
+        $result = & $selfTest
         Assert-Migration (-not $result.Passed -and $result.ErrorCode -ceq 'LiveTestTimeout') 'Live test timeout is reported explicitly without ready status'
         $script:processResult.TimedOut = $false; $script:processResult.ExitCode = 1
-        $result = Invoke-HermesResearchLiveTest -ResearchRoot $testRoot -Python 'fixture.exe' -Environment @{} -UserID ('h'*26)
-        Assert-Migration (-not $result.Passed -and $result.ErrorCode -ceq 'LiveTestFailed') 'Failed model or tool run cannot mark installation ready'
+        $result = & $selfTest
+        Assert-Migration (-not $result.Passed -and $result.ErrorCode -ceq 'LiveTestFailed') 'A failing test process cannot mark the installation ready, whatever it prints'
         $script:processResult.ExitCode = 0; $script:processResult.StdOut = 'not-json'
-        $result = Invoke-HermesResearchLiveTest -ResearchRoot $testRoot -Python 'fixture.exe' -Environment @{} -UserID ('h'*26)
+        $result = & $selfTest
         Assert-Migration (-not $result.Passed -and $result.ErrorCode -ceq 'LiveTestEvidenceRejected') 'Malformed evidence is held rather than assumed successful'
         Write-Host ('Research migration tests passed: '+$script:passed)
     } finally {

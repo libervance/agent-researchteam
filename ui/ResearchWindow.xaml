@@ -11,7 +11,7 @@
     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
     <StackPanel Margin="0,0,0,16">
       <TextBlock Text="내 PC에 만드는 1인 연구실" FontSize="28" FontWeight="SemiBold" Foreground="#172A4A"/>
-      <TextBlock Text="Mattermost 로컬 서버 + Hermes + 자동 분업 연구팀 4개 역할" Margin="0,6,0,0" Foreground="#56657D"/>
+      <TextBlock Text="Mattermost 로컬 서버 + Hermes + 논문·보고서 연구팀 5개 역할" Margin="0,6,0,0" Foreground="#56657D"/>
     </StackPanel>
     <TabControl x:Name="WizardTabs" Grid.Row="1">
       <TabItem x:Name="ServerTab" Header="1. 로컬 서버">
@@ -44,7 +44,7 @@
       </TabItem>
       <TabItem x:Name="HermesTab" Header="2. Hermes·모델" IsEnabled="False">
         <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="20">
-          <TextBlock Text="Hermes를 설치하고 네 에이전트가 사용할 모델을 연결합니다." FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap"/>
+          <TextBlock Text="Hermes를 설치합니다. Codex 직접 연결을 쓸 경우에만 모델 계정에 로그인합니다." FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap"/>
           <CheckBox x:Name="UseExistingHermesCheck" Margin="0,14,0,8"><TextBlock Text="이 PC의 기존 Hermes를 선택해 사용합니다. 재설치·업데이트·새 로그인 없이 기존 인증과 프로필을 유지합니다. 선택한 로컬 설치의 코드를 실행하는 데 동의합니다." TextWrapping="Wrap"/></CheckBox>
           <Grid Margin="0,0,0,8">
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -60,64 +60,56 @@
           <WrapPanel><Button x:Name="AuthButton" Content="모델 계정 로그인" IsEnabled="False"/><Button x:Name="AuthOpenButton" Content="인증 페이지 열기" IsEnabled="False"/></WrapPanel>
           <TextBlock x:Name="AuthStatus" Text="Hermes 설치 또는 기존 설치 확인 뒤 로그인 상태를 확인합니다." Margin="0,12,0,8" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
           <TextBox x:Name="AuthCode" IsReadOnly="True" FontSize="20" AutomationProperties.Name="일회용 인증 코드"/>
-          <TextBlock Text="공통 기본 모델" Margin="0,12,0,6"/>
+          <TextBlock Text="Codex 모델 (‘Codex 직접 연결’을 쓸 때만 필요 — 모델 라우터를 쓰면 로그인 없이 다음으로 넘어가도 됩니다)" Margin="0,12,0,6" TextWrapping="Wrap"/>
           <ComboBox x:Name="ModelCombo" IsEnabled="False" MinHeight="32" AutomationProperties.Name="연구 에이전트 기본 모델"/>
-          <Button x:Name="HermesNextButton" Content="다음: 에이전트 4개" HorizontalAlignment="Right" Margin="0,16,0,0" IsEnabled="False"/>
+          <Button x:Name="HermesNextButton" Content="다음: 에이전트 5개" HorizontalAlignment="Right" Margin="0,16,0,0" IsEnabled="False"/>
         </StackPanel></ScrollViewer>
       </TabItem>
-      <TabItem x:Name="TeamTab" Header="3. 에이전트 4개" IsEnabled="False">
+      <TabItem x:Name="TeamTab" Header="3. 에이전트 5개" IsEnabled="False">
         <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="20">
-          <TextBlock Text="네 에이전트의 이름·봇 토큰·역할을 한 화면에서 설정합니다." FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap"/>
+          <TextBlock Text="논문·보고서를 함께 쓰는 다섯 에이전트를 한 화면에서 설정합니다." FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap"/>
+          <TextBlock Text="총괄이 사용자와 대화하며 작업 보드에 일을 나누고, 조사·분석/실험·감사/심사·집필 담당이 각자의 실행기에서 작업합니다. 심사와 감사는 작성 과정을 모르는 상태(블라인드)로 진행되며, 모든 결과는 작업한 버전(commit)과 함께 기록됩니다." TextWrapping="Wrap" Foreground="#56657D" Margin="0,6,0,0"/>
           <Grid Margin="0,12,0,12">
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="20"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
             <StackPanel><TextBlock Text="로컬 Mattermost 주소"/><TextBox x:Name="TeamServerURL" Text="http://127.0.0.1:18065" IsReadOnly="True" Margin="0,5,0,0"/></StackPanel>
             <StackPanel Grid.Column="2"><TextBlock Text="연구 채널 ID"/><TextBox x:Name="HomeChannelID" IsReadOnly="True" Margin="0,5,0,0"/></StackPanel>
           </Grid>
-          <TextBlock Text="토큰은 직접 입력하거나 행의 ‘봇 발급’을 누르세요. 발급 시 아래에 이 연구실의 관리자 비밀번호를 입력합니다." TextWrapping="Wrap" Margin="0,0,0,10"/>
+          <TextBlock Text="토큰은 직접 입력하거나 행의 ‘봇 발급’을 누르세요. 발급 시 아래에 이 연구실의 관리자 비밀번호를 입력합니다. 에이전트마다 서로 다른 봇이 필요합니다." TextWrapping="Wrap" Margin="0,0,0,10"/>
           <DockPanel Margin="0,0,0,12"><TextBlock Text="봇 발급용 관리자 비밀번호" VerticalAlignment="Center" Margin="0,0,12,0"/><PasswordBox x:Name="TeamAdminPassword" Width="260" HorizontalAlignment="Left" AutomationProperties.Name="봇 발급용 관리자 비밀번호"/></DockPanel>
-          <Grid x:Name="AgentRows" AutomationProperties.Name="연구 에이전트 네 개 설정"/>
-          <Expander Header="역할 이름·상세 지침 편집 — 나중에도 수정 가능" Margin="0,14,0,10">
-            <StackPanel Margin="0,10,0,0">
-              <ComboBox x:Name="RoleEditorCombo" MinHeight="32" AutomationProperties.Name="편집할 역할"/>
-              <TextBlock Text="역할 이름" Margin="0,8,0,4"/><TextBox x:Name="RoleName"/>
-              <TextBlock Text="상세 역할 지침" Margin="0,8,0,4"/>
-              <TextBox x:Name="RoleInstructions" Height="85" TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"/>
-              <WrapPanel><Button x:Name="RoleSaveButton" Content="역할 템플릿 저장" Margin="0,8,0,0"/><Button x:Name="PersonaResetButton" Content="제공된 네 TXT 전체 불러오기" Margin="8,8,0,0"/></WrapPanel>
-            </StackPanel>
-          </Expander>
+          <Grid x:Name="AgentRows" AutomationProperties.Name="연구 에이전트 다섯 개 설정"/>
           <Separator Margin="0,10,0,12"/>
-          <TextBlock Text="자동 분업 실행 설정" FontSize="19" FontWeight="SemiBold"/>
-          <TextBlock Text="총괄 배정 → 조사 → 분석 → 감사 → 총괄 종합을 프로그램이 관리합니다. 감사 반려 시 담당자가 수정하고 재검사를 받습니다." TextWrapping="Wrap" Margin="0,6,0,12"/>
-          <Grid>
+          <TextBlock Text="모델 연결" FontSize="19" FontWeight="SemiBold"/>
+          <RadioButton x:Name="ModelModeGateway" GroupName="ModelMode" IsChecked="True" Margin="0,8,0,4"><TextBlock Text="모델 라우터 (권장) — API 키로 역할별 모델을 고르고, 논문의 공개 등급(public / private / air-gapped)에 따라 클라우드와 로컬 모델을 나눕니다. 로컬 모델이 없으면 비공개 논문은 실행하지 않고 이유를 알립니다." TextWrapping="Wrap"/></RadioButton>
+          <Grid x:Name="GatewayPanel" Margin="24,4,0,8">
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="20"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-            <StackPanel><TextBlock Text="작업 폴더"/><DockPanel Margin="0,5,0,0"><Button x:Name="WorkspaceBrowseButton" Content="찾기" DockPanel.Dock="Right" Margin="8,0,0,0"/><TextBox x:Name="WorkspacePath" AutomationProperties.Name="연구 작업 폴더"/></DockPanel></StackPanel>
-            <StackPanel Grid.Column="2"><TextBlock Text="연구 요청을 허용할 Mattermost 사용자 이름"/><TextBox x:Name="HumanUsername" Text="researcher" Margin="0,5,0,0" AutomationProperties.Name="허용할 연구자 사용자 이름"/></StackPanel>
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <StackPanel Margin="0,0,0,10"><TextBlock Text="Anthropic API 키 (Claude, 우선 사용)"/><PasswordBox x:Name="AnthropicKey" Margin="0,5,0,0" AutomationProperties.Name="Anthropic API 키"/></StackPanel>
+            <StackPanel Grid.Column="2" Margin="0,0,0,10"><TextBlock Text="OpenAI API 키 (장애 시 대체, 또는 단독)"/><PasswordBox x:Name="OpenAIKey" Margin="0,5,0,0" AutomationProperties.Name="OpenAI API 키"/></StackPanel>
+            <StackPanel Grid.Row="1" Margin="0,0,0,10"><TextBlock Text="로컬 모델 주소 (선택, 예: http://127.0.0.1:8000/v1)"/><TextBox x:Name="LocalBaseURL" Margin="0,5,0,0" AutomationProperties.Name="로컬 모델 주소"/></StackPanel>
+            <StackPanel Grid.Row="1" Grid.Column="2" Margin="0,0,0,10"><TextBlock Text="로컬 모델 이름 (선택)"/><TextBox x:Name="LocalModel" Margin="0,5,0,0" AutomationProperties.Name="로컬 모델 이름"/></StackPanel>
+            <StackPanel Grid.Row="2"><TextBlock Text="라우터 포트 (이 PC 안에서만 사용)"/><TextBox x:Name="GatewayPort" Text="18400" Margin="0,5,0,0" AutomationProperties.Name="모델 라우터 포트"/></StackPanel>
           </Grid>
-          <TextBlock Text="입력 자료는 선택한 폴더의 inputs에 넣으세요. 원본은 읽기만 하며, 결과·버전·감사 기록은 연구팀의 보호된 저장소에 보관합니다. 사용자 이름은 설치 중 실제 사람 계정·채널 참여 여부로 확인합니다." TextWrapping="Wrap" Foreground="#56657D" Margin="0,6,0,10"/>
-          <TextBlock x:Name="SelectedModelSummary" Text="모델: 2단계에서 인증한 공통 모델을 네 역할에 적용합니다." TextWrapping="Wrap" Margin="0,0,0,8"/>
-          <TextBlock Text="역할별 기본 도구: 관리(배정·자료 읽기·종합), 조사(공개 웹 검색·원문 읽기·작성), 분석(자료 읽기·작성), 감사(자료 읽기·검증). 감사자는 원본을 수정할 수 없고 작업 재배정은 관리자만 할 수 있습니다." TextWrapping="Wrap" Margin="0,0,0,10"/>
-          <CheckBox x:Name="ModelEgressConsent" Margin="0,0,0,8"><TextBlock Text="선택한 모델 제공자에게 요청·페르소나·허용 자료를 보내는 데 동의합니다. 실제 분업 테스트와 연구 실행은 연결한 모델 계정의 사용량을 소모합니다." TextWrapping="Wrap"/></CheckBox>
-          <CheckBox x:Name="PublicWebConsent" Margin="0,0,0,10"><TextBlock Text="조사 담당의 DuckDuckGo 공개 웹 검색 및 공개 HTTPS 원문 읽기를 허용합니다. 검색어는 검색 서비스에 전송되며 로그인·사설망 자료는 이 도구로 읽지 않습니다." TextWrapping="Wrap"/></CheckBox>
-          <Expander Header="역할별 자료 접근·실행 한도 (기본값 조절 가능)" IsExpanded="True" Margin="0,0,0,10">
-            <StackPanel Margin="0,8,0,0">
-              <TextBlock Text="한도는 요청별·역할별 상한입니다. 감사는 산출물별 검수 기록 수(기본 흐름 6회)이며 감사자 기본값 20회는 재검수를 포함합니다. 시간은 초 단위, 토큰은 보수적 예약량을 포함합니다. 한도를 넘으면 자동 중단합니다." TextWrapping="Wrap" Margin="0,0,0,8"/>
-              <Grid x:Name="PolicyRoleRows" AutomationProperties.Name="역할별 자료 접근 및 실행 한도"/>
-              <Button x:Name="PolicyDefaultsButton" Content="권장 한도로 되돌리기" HorizontalAlignment="Left" Margin="0,8,0,0"/>
-            </StackPanel>
-          </Expander>
-          <Expander Header="고급: 저장된 운영 설정 보기 (직접 작성할 필요 없음)" Margin="0,0,0,10">
-            <StackPanel Margin="0,8,0,0">
-              <TextBlock Text="설치 중 위 선택으로 운영 설정을 생성합니다. 이 보기는 확인용이며 실행 중 요청의 정책을 변경하지 않습니다." TextWrapping="Wrap"/>
-              <TextBox x:Name="PolicyJson" Height="180" IsReadOnly="True" AcceptsReturn="True" FontFamily="Consolas" FontSize="12" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" Margin="0,8,0,8" AutomationProperties.Name="운영 설정 확인용 JSON"/>
-              <WrapPanel><Button x:Name="PolicyLoadButton" Content="저장된 운영 설정 읽기"/><Button x:Name="PolicySaveButton" Content="현재 설치 선택 보기"/></WrapPanel>
-            </StackPanel>
-          </Expander>
-          <CheckBox x:Name="TeamResumeCheck" Content="이 마법사에서 만든 연구 프로필을 재설정 (이름·역할·토큰 변경, 메모리·세션 유지)" Margin="0,6,0,10"/>
-          <CheckBox x:Name="MigrationConsent" Margin="0,0,0,10"><TextBlock Text="기존 연구팀을 전환할 때 이 마법사 소유의 네 봇 연결만 중지·교체합니다. 기록·인증·프로필은 보존하고 같은 요청에 중복 응답하지 않도록 분배 서비스로 전환하는 데 동의합니다." TextWrapping="Wrap"/></CheckBox>
-          <CheckBox x:Name="TeamConsent" Margin="0,0,0,12"><TextBlock Text="위 설정으로 네 프로필·자동 실행 서비스를 구성하고 실제 모델·검색을 사용한 분업 테스트를 연구 채널에 게시하는 데 동의합니다. 네 역할과 감사 기록 확인 전에는 사용 준비 완료로 표시하지 않습니다." TextWrapping="Wrap"/></CheckBox>
-          <WrapPanel><Button x:Name="TeamApplyButton" Content="연구팀 설치·실제 분업 테스트" IsEnabled="False"/><Button x:Name="TeamOpenButton" Content="연구 채널 열기" IsEnabled="False"/></WrapPanel>
+          <RadioButton x:Name="ModelModeCodex" GroupName="ModelMode" Margin="0,4,0,4"><TextBlock Text="Codex 직접 연결 — 2단계에서 로그인한 ChatGPT/Codex 모델을 다섯 역할이 함께 씁니다. 공개(public) 논문·보고서만 처리합니다." TextWrapping="Wrap"/></RadioButton>
+          <TextBlock x:Name="SelectedModelSummary" Text="Codex 모델: 2단계에서 로그인하면 선택할 수 있습니다." TextWrapping="Wrap" Margin="24,0,0,8" Foreground="#56657D"/>
+          <Separator Margin="0,10,0,12"/>
+          <TextBlock Text="작업 설정" FontSize="19" FontWeight="SemiBold"/>
+          <Grid Margin="0,8,0,0">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="20"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <StackPanel Margin="0,0,0,10"><TextBlock Text="작업 폴더 (논문·보고서·_template)"/><DockPanel Margin="0,5,0,0"><Button x:Name="WorkspaceBrowseButton" Content="찾기" DockPanel.Dock="Right" Margin="8,0,0,0"/><TextBox x:Name="WorkspacePath" AutomationProperties.Name="연구 작업 폴더"/></DockPanel></StackPanel>
+            <StackPanel Grid.Column="2" Margin="0,0,0,10"><TextBlock Text="요청을 허용할 Mattermost 사용자 이름"/><TextBox x:Name="HumanUsername" Text="researcher" Margin="0,5,0,0" AutomationProperties.Name="허용할 연구자 사용자 이름"/></StackPanel>
+            <StackPanel Grid.Row="1"><TextBlock Text="작업 하나의 시간 한도 (분, 30~720)"/><TextBox x:Name="TaskTimeoutMinutes" Text="180" Margin="0,5,0,0" AutomationProperties.Name="작업 시간 한도"/></StackPanel>
+            <StackPanel Grid.Row="1" Grid.Column="2"><TextBlock Text="동시에 심사하는 심사자 수 (1~3)"/><ComboBox x:Name="ReviewerSlots" MinHeight="32" Margin="0,5,0,0" AutomationProperties.Name="동시 심사자 수"/></StackPanel>
+          </Grid>
+          <TextBlock Text="작업 하나가 시간 한도를 넘으면 중단하고 스레드에 알립니다. 일시적인 모델 오류는 자동으로 다시 시도합니다. 원고 PDF를 만들려면 이 PC에 TeX(MiKTeX 또는 TeX Live)가 있어야 합니다. 없으면 집필 작업이 이유와 함께 보류됩니다." TextWrapping="Wrap" Foreground="#56657D" Margin="0,8,0,10"/>
+          <CheckBox x:Name="ModelEgressConsent" Margin="0,0,0,8"><TextBlock Text="선택한 모델 제공자(또는 로컬 모델)에 작업·논문 내용을 보내는 데 동의합니다. 설치 테스트와 실제 작업은 모델 사용량을 소모합니다." TextWrapping="Wrap"/></CheckBox>
+          <CheckBox x:Name="PublicWebConsent" Margin="0,0,0,10"><TextBlock Text="문헌 조사·인용 검증에 필요한 공개 웹 검색과 원문 읽기(arXiv·Semantic Scholar·DOI 등)를 허용합니다. 비공개 논문의 내용은 검색어로 보내지 않습니다." TextWrapping="Wrap"/></CheckBox>
+          <CheckBox x:Name="TeamResumeCheck" Content="이 마법사에서 만든 연구팀을 재설정 (이름·토큰·모델·설정 변경, 기록·메모리·세션 유지)" Margin="0,6,0,10"/>
+          <CheckBox x:Name="MigrationConsent" Margin="0,0,0,10"><TextBlock Text="이전 4역할 연구팀(분배 서비스)이 있으면, 진행 중 작업이 끝난 뒤 그 서비스를 멈추고 설정을 백업한 다음 새 팀으로 바꾸는 데 동의합니다. 대화·산출물·기록은 지우지 않습니다." TextWrapping="Wrap"/></CheckBox>
+          <CheckBox x:Name="TeamConsent" Margin="0,0,0,12"><TextBlock Text="위 설정으로 다섯 프로필과 자동 실행 서비스를 구성하고, 실제 모델·봇으로 각 역할이 작은 작업을 하는 설치 테스트를 연구 채널에 게시하는 데 동의합니다. 다섯 역할의 결과·전달·기록 확인 전에는 사용 준비 완료로 표시하지 않습니다." TextWrapping="Wrap"/></CheckBox>
+          <WrapPanel><Button x:Name="TeamApplyButton" Content="연구팀 설치·실제 작업 테스트" IsEnabled="False"/><Button x:Name="TeamOpenButton" Content="연구 채널 열기" IsEnabled="False"/></WrapPanel>
           <TextBox x:Name="TeamResult" Height="95" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Margin="0,12,0,0" AutomationProperties.Name="연구팀 구성 결과"/>
-          <TextBlock Text="사용 준비 완료 후 연구 채널에서 ‘@research-lead ○○에 대한 보고서 작성해줘’라고 요청하세요. 완성된 검토 보고서는 기본적으로 Word(.docx) 파일로 첨부됩니다. 답변·작업 전달·감사 기록은 같은 스레드에 남고 봇 간 응답은 멘션이 있어야 합니다. 관리 에이전트만 다른 봇의 답변을 자동 관찰합니다. 실제 호출 이름은 설치 결과에 표시됩니다." TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#56657D"/>
+          <TextBlock Text="사용 준비 완료 후 연구 채널에서 총괄 봇을 멘션하세요. ‘@research-lead ○○에 대한 보고서 작성해줘’ → 조사·감사를 거친 보고서를 Word 파일로 첨부, ‘@research-lead ○○ 주제로 논문을 시작하자’ → 범위·주장·개요 확인 후 집필, ‘@research-lead 심사 라운드 돌려줘’ → 블라인드 심사 3건과 인용 검증 후 종합 판정. 진행 상황은 각 담당 봇이 같은 스레드에 올립니다." TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#56657D"/>
         </StackPanel></ScrollViewer>
       </TabItem>
     </TabControl>

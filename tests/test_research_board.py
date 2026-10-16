@@ -1,0 +1,302 @@
+"""research_board end to end: a bare board repo, a stub `hermes`, a mock Mattermost.
+
+Runs on Windows and POSIX. Covers init + papers file, blind snapshots, output filtering,
+the hash-chained ledger, transient retries, the profile integrity check, refusal of
+non-public papers without a gateway, frozen protocols and verified delivery.
+"""
+import hashlib
+import http.server
+import importlib.util
+import io
+import json
+import os
+import shutil
+import subprocess as sp
+import sys
+import tempfile
+import threading
+import unittest
+import zipfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+BOARD = ROOT / "team" / "shared" / "research_board.py"
+
+STUB = r'''
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+prompt = Path(args[args.index("--query-file") + 1]).read_text(encoding="utf-8")
+log = Path(os.environ["STUB_LOG"])
+with log.open("a", encoding="utf-8") as f:
+    f.write(json.dumps({"cwd": os.getcwd(), "profile": args[args.index("-p") + 1],
+                        "has_git": Path(".git").exists(), "has_tasks": Path(".tasks").exists(),
+                        "token": os.environ.get("MATTERMOST_TOKEN"), "secret": os.environ.get("RESEARCH_GATEWAY_SECRET"),
+                        "len": len(prompt), "skills": [args[i + 1] for i, x in enumerate(args) if x == "-s"]}) + "\n")
+counter = Path(os.environ["STUB_LOG"] + ".count")
+n = int(counter.read_text()) + 1 if counter.exists() else 1
+counter.write_text(str(n))
+if "FLAKY" in prompt and n == 1:
+    print("upstream error: 529 overloaded", file=sys.stderr); sys.exit(1)
+if "WRITE-PAPER" in prompt:
+    Path("paper").mkdir(exist_ok=True); Path("paper/main.tex").write_text("\\section{x} é\n", encoding="utf-8")
+    Path("stray.txt").write_text("not an output")
+    Path("paper/main.aux").write_text("junk")
+if "REVIEW" in prompt:
+    Path("reviews/round-1").mkdir(parents=True, exist_ok=True)
+    Path("reviews/round-1/meta.md").write_text("# Meta\n**Call:** minor revision\nPRESENTATION one\n", encoding="utf-8")
+    Path("paper").mkdir(exist_ok=True); Path("paper/main.tex").write_text("reviewer edit")
+if "REPORT" in prompt:
+    Path("notes").mkdir(exist_ok=True)
+    Path("notes/report.md").write_text("# 보고서\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n", encoding="utf-8")
+if "TOUCH-PROTOCOL" in prompt:
+    Path("experiments/x1/protocol.md").write_text("changed")
+print("work done")
+print("STATUS: blocked — cannot" if "BLOCK" in prompt else "STATUS: done")
+'''
+
+
+class MockMattermost(http.server.BaseHTTPRequestHandler):
+    posts, files = [], {}
+
+    def log_message(self, *a):
+        pass
+
+    def _json(self, obj, code=200):
+        data = json.dumps(obj).encode()
+        self.send_response(code); self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        if self.path == "/api/v4/posts":
+            post = json.loads(body); post["id"] = f"p{len(self.posts):025d}"
+            MockMattermost.posts.append(post); return self._json(post)
+        if self.path == "/api/v4/files":
+            boundary = self.headers["Content-Type"].split("boundary=")[1].encode()
+            part = [p for p in body.split(b"--" + boundary) if b'name="files"' in p][0]
+            data = part.split(b"\r\n\r\n", 1)[1].rsplit(b"\r\n", 1)[0]
+            fid = f"f{len(self.files):025d}"; MockMattermost.files[fid] = data
+            return self._json({"file_infos": [{"id": fid, "size": len(data)}]})
+        self._json({}, 404)
+
+    def do_GET(self):
+        fid = self.path.rsplit("/", 1)[-1]
+        if fid in self.files:
+            data = self.files[fid]
+            self.send_response(200); self.send_header("Content-Length", str(len(data))); self.end_headers()
+            self.wfile.write(data); return
+        self._json({}, 404)
+
+
+def git(*args, cwd=None):
+    return sp.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+
+class Base(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), MockMattermost)
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def setUp(self):
+        MockMattermost.posts.clear(); MockMattermost.files.clear()
+        self.tmp = Path(tempfile.mkdtemp(prefix="board-test-"))
+        self.home = self.tmp / "team"; self.hh = self.tmp / "hermes"
+        self.ws = self.tmp / "ws"; self.ws.mkdir(); (self.tmp / "empty.gitconfig").write_text("")
+        stub = self.tmp / "stub.py"; stub.write_text(STUB, encoding="utf-8")
+        if os.name == "nt":
+            self.hermes = self.tmp / "hermes-stub.cmd"
+            self.hermes.write_text(f'@"{sys.executable}" "{stub}" %*\r\n')
+        else:
+            self.hermes = self.tmp / "hermes-stub"
+            self.hermes.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{stub}" "$@"\n'); self.hermes.chmod(0o755)
+        self.log = self.tmp / "stub.log"
+        self.env = {**os.environ, "RESEARCH_TEAM_HOME": str(self.home), "HERMES_HOME": str(self.hh),
+                    "STUB_LOG": str(self.log), "MATTERMOST_URL": f"http://127.0.0.1:{self.server.server_port}",
+                    "MATTERMOST_TOKEN": "t" * 26, "RESEARCH_GATEWAY_SECRET": "",
+                    # no global git identity, as on a fresh Windows account
+                    "GIT_CONFIG_GLOBAL": str(self.tmp / "empty.gitconfig"), "GIT_CONFIG_NOSYSTEM": "1",
+                    "RESEARCH_TEAM_MANIFEST": str(self.tmp / "manifest.json")}
+        for role in ("research-writer", "research-reviewer", "research-librarian", "research-experimenter"):
+            (self.hh / "profiles" / role).mkdir(parents=True)
+        self.paper = self.ws / "p1"; self.paper.mkdir()
+        (self.paper / "CLAUDE.md").write_text("# p1\n**Sensitivity:** public\n", encoding="utf-8")
+        self.board("init", str(self.paper))
+        self.board("setup", str(self.paper), "--channel", "c" * 26, "--mention", "@me")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def board(self, *args, check=True):
+        r = sp.run([sys.executable, str(BOARD), *args], env=self.env, capture_output=True,
+                   encoding="utf-8", errors="replace", cwd=self.ws)
+        if check and r.returncode:
+            self.fail(f"{args[0]} failed: {r.stdout}\n{r.stderr}")
+        return r
+
+    def run_role(self, role, *extra):
+        return self.board("run", "--role", role, "--once", "--interval", "1", "--hermes", str(self.hermes), *extra)
+
+    def task(self, tid, assignee, body, *extra):
+        self.board("new", str(self.paper), "--id", tid, "--assignee", assignee, "--body", body, *extra)
+
+    def state(self, tid):
+        git("pull", "-q", cwd=self.paper)
+        return self.board("show", str(self.paper), tid).stdout
+
+    def calls(self):
+        return [json.loads(l) for l in self.log.read_text(encoding="utf-8").splitlines()] if self.log.exists() else []
+
+
+
+class BoardTests(Base):
+    def test_init_registers_paper_and_runner_reads_papers_file(self):
+        papers = (self.home / "papers").read_text(encoding="utf-8").split()
+        self.assertEqual([str(self.home / "boards" / "p1.git")], papers)
+        self.task("w1", "research-writer", "WRITE-PAPER", "--expects", "paper/main.tex")
+        self.run_role("research-writer")  # no URLs given: <team home>/papers
+        self.assertIn("status: done", self.state("w1"))
+
+    def test_writer_outputs_filtered_ledger_chained_and_secrets_withheld(self):
+        self.task("w1", "research-writer", "WRITE-PAPER", "--expects", "paper/main.tex")
+        self.run_role("research-writer")
+        git("pull", "-q", cwd=self.paper)
+        files = git("ls-files", cwd=self.paper).split("\n")
+        self.assertIn("paper/main.tex", files)
+        self.assertNotIn("stray.txt", files); self.assertNotIn("paper/main.aux", files)
+        self.assertEqual("\\section{x} é\n", (self.paper / "paper/main.tex").read_text(encoding="utf-8"))
+        call = self.calls()[0]
+        self.assertIsNone(call["token"]); self.assertFalse(call["secret"])
+        ledger = [json.loads(l) for l in (self.paper / ".tasks/ledger.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual("done", ledger[0]["status"]); self.assertEqual("", ledger[0]["prev"])
+        self.assertEqual(hashlib.sha256((self.paper / "paper/main.tex").read_bytes()).hexdigest(),
+                         ledger[0]["outputs"]["paper/main.tex"])
+        self.assertIn("at commit", self.state("w1"))
+        self.assertIn("ledger intact: 1", self.board("ledger", str(self.paper), "--verify").stdout)
+
+    def test_ledger_rewrite_is_detected_and_reported(self):
+        for tid in ("w1", "w2"):
+            self.task(tid, "research-writer", "WRITE-PAPER")
+            self.run_role("research-writer")
+        git("pull", "-q", cwd=self.paper)
+        led = self.paper / ".tasks/ledger.jsonl"
+        lines = led.read_text(encoding="utf-8").splitlines()
+        lines[0] = lines[0].replace('"done"', '"failed"')  # rewrite an earlier entry
+        led.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self.task("w3", "research-writer", "WRITE-PAPER")
+        git("add", "-A", cwd=self.paper); git("commit", "-qm", "tamper", cwd=self.paper); git("push", "-q", cwd=self.paper)
+        self.assertNotEqual(0, self.board("ledger", str(self.paper), "--verify", check=False).returncode)
+        self.run_role("research-writer")
+        self.assertTrue(any("ledger was rewritten" in p["message"] for p in MockMattermost.posts))
+        # the break is now on record, so later tasks do not warn again
+        self.assertEqual(0, self.board("ledger", str(self.paper), "--verify", check=False).returncode)
+
+    def test_blind_reviewer_sees_snapshot_cannot_edit_paper_and_checkpoint_names_commit(self):
+        self.task("w1", "research-writer", "WRITE-PAPER")
+        self.run_role("research-writer")
+        self.task("r1", "research-reviewer", "REVIEW", "--expects", "reviews/round-1/meta.md", "--after", "w1")
+        self.run_role("research-reviewer")
+        call = [c for c in self.calls() if c["profile"] == "research-reviewer"][0]
+        self.assertFalse(call["has_git"]); self.assertFalse(call["has_tasks"])
+        self.assertNotEqual("reviewer edit", (self.paper / "paper/main.tex").read_text(encoding="utf-8"))
+        base = [l for l in self.state("r1").splitlines() if l.startswith("base:")][0].split()[1]
+        ck = [p for p in MockMattermost.posts if "round checkpoint" in p["message"]]
+        self.assertTrue(ck and base[:12] in ck[0]["message"] and "@me" in ck[0]["message"])
+
+    def test_drifted_profile_blocks_task(self):
+        soul = self.hh / "profiles/research-writer/SOUL.md"; soul.write_text("original", encoding="utf-8")
+        (self.tmp / "manifest.json").write_text(json.dumps({"profiles": {"research-writer": {
+            "SOUL.md": hashlib.sha256(b"original").hexdigest()}}}), encoding="utf-8")
+        soul.write_text("tampered", encoding="utf-8")
+        self.task("w1", "research-writer", "WRITE-PAPER")
+        self.run_role("research-writer")
+        self.assertIn("status: blocked", self.state("w1")); self.assertIn("differs from the install", self.state("w1"))
+        self.assertEqual([], self.calls())
+
+    def test_private_paper_refused_without_gateway(self):
+        (self.paper / "CLAUDE.md").write_text("**Sensitivity:** private\n", encoding="utf-8")
+        self.board("publish", str(self.paper), "-m", "private", "CLAUDE.md")
+        self.task("w1", "research-writer", "WRITE-PAPER")
+        self.run_role("research-writer")
+        self.assertIn("status: blocked", self.state("w1")); self.assertEqual([], self.calls())
+
+    def test_frozen_protocol_restored_and_task_failed(self):
+        d = self.paper / "experiments/x1"; d.mkdir(parents=True)
+        (d / "protocol.md").write_text("plan", encoding="utf-8")
+        self.board("publish", str(self.paper), "-m", "protocol", "experiments")
+        self.board("approve", str(self.paper), "x1", "--by", "@me")
+        self.task("e1", "research-experimenter", "TOUCH-PROTOCOL")
+        self.run_role("research-experimenter")
+        self.assertIn("status: failed", self.state("e1"))
+        self.assertEqual("plan", (d / "protocol.md").read_text(encoding="utf-8"))
+
+    def test_long_prompt_passed_as_file_and_role_skills_preloaded(self):
+        self.task("w1", "research-writer", "WRITE-PAPER " + "x" * 40000, "--skills", "presubmission")
+        self.run_role("research-writer")
+        self.assertIn("status: done", self.state("w1"))
+        self.assertGreater(self.calls()[0]["len"], 40000)
+        self.assertEqual(["manuscript-check", "presubmission"], self.calls()[0]["skills"])
+        self.assertEqual([], list((self.home / "run" / "prompts").glob("*")))
+
+    def test_report_delivered_as_verified_docx(self):
+        self.task("l1", "research-librarian", "REPORT", "--expects", "notes/report.md", "--deliver", "notes/report.md:docx")
+        self.run_role("research-librarian")
+        self.assertIn("status: done", self.state("l1"))
+        self.assertEqual(1, len(MockMattermost.files))
+        data = next(iter(MockMattermost.files.values()))
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            self.assertIn("1", z.read("word/document.xml").decode())
+        posted = [p for p in MockMattermost.posts if p.get("file_ids")]
+        self.assertTrue(posted and "verified" in posted[0]["message"])
+
+    def test_lead_delivers_committed_report_and_refuses_local_edits(self):
+        d = self.paper / "notes/r"; d.mkdir(parents=True)
+        (d / "report.md").write_text("# R\n\nbody [1]\n", encoding="utf-8")
+        self.board("publish", str(self.paper), "-m", "report", "notes")
+        r = self.board("deliver", str(self.paper), "notes/r/report.md:docx", "notes/r/report.md", "--thread", "p" * 26)
+        self.assertIn("delivered and verified", r.stdout)
+        self.assertEqual(2, len(MockMattermost.files))
+        self.assertTrue(all(p["root_id"] == "p" * 26 for p in MockMattermost.posts if p.get("file_ids")))
+        (d / "report.md").write_text("edited", encoding="utf-8")
+        self.assertNotEqual(0, self.board("deliver", str(self.paper), "notes/r/report.md", check=False).returncode)
+
+    def test_bad_deliver_spec_rejected(self):
+        r = self.board("new", str(self.paper), "--id", "x", "--assignee", "research-writer", "--body", "b",
+                       "--deliver", "paper/main.pdf:docx", check=False)
+        self.assertNotEqual(0, r.returncode)
+
+
+# The retry delays are minutes in production; exercise the retry path in-process with them shortened.
+def _load_board():
+    spec = importlib.util.spec_from_file_location("research_board_under_test", BOARD)
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    sys.modules["research_board_under_test"] = mod
+    return mod
+
+
+class RetryTests(Base):
+    def test_transient_failure_retried(self):
+        rb = _load_board()
+        rb.RETRY_DELAYS = [0]
+        os.environ.update({k: v for k, v in self.env.items() if k in ("STUB_LOG", "HERMES_HOME")})
+        rb.TEAM_HOME = self.home
+        rb.MANIFEST = self.tmp / "manifest.json"
+        self.task("w1", "research-writer", "FLAKY WRITE-PAPER")
+        clone = self.tmp / "clone"; git("clone", "-q", str(self.home / "boards/p1.git"), str(clone))
+        rb.git_identity(clone, "research-writer")
+        p = clone / ".tasks/w1.md"
+        args = type("A", (), dict(role="research-writer", profile=None, hermes=str(self.hermes), yolo=False,
+                                  heartbeat=600, task_timeout=600))()
+        self.assertTrue(rb.claim(clone, p, "me"))
+        rb.execute(args, clone, p, "me")
+        self.assertEqual(2, len(self.calls()))
+        self.assertIn("status: done", self.state("w1"))
+
+
+if __name__ == "__main__":
+    unittest.main()

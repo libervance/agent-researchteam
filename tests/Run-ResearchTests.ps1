@@ -2,117 +2,102 @@
 param()
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$source = Join-Path (Split-Path -Parent $PSScriptRoot) 'src'
+$projectRoot = Split-Path -Parent $PSScriptRoot
+$source = Join-Path $projectRoot 'src'
 Import-Module (Join-Path $source 'HermesEasySetup.Core.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $source 'HermesEasySetup.Research.psm1') -Force -DisableNameChecking
 $script:passed = 0
 function Assert { param($Ok, [string]$Name) if (-not $Ok) { throw $Name }; $script:passed++; Write-Host "PASS $Name" }
 function Reject {
-    param([scriptblock]$Action, [string]$Name, [string]$Secret = '')
+    param([scriptblock]$Action, [string]$Name, [string[]]$Secrets = @())
     $failed = $false
     try { & $Action | Out-Null } catch {
         $failed = $true
-        if ($Secret -and $_.Exception.Message.Contains($Secret)) { throw 'Validation reflected a fixture secret.' }
+        foreach ($secret in $Secrets) { if ($secret -and $_.Exception.Message.Contains($secret)) { throw "Validation reflected a fixture secret: $Name" } }
     }
     Assert $failed $Name
 }
 function New-TeamFixture {
+    param([string]$Mode = 'Gateway')
     $agents = @(New-HermesResearchDefaultAgents)
-    for ($i = 0; $i -lt 4; $i++) { $agents[$i].BotToken = ([string][char](97 + $i)) * 26 }
-    return [pscustomobject]@{ SchemaVersion = 1; ServerURL = 'http://localhost:8065/'; HomeChannelID = 'h' * 26; ModelName = 'gpt-5.4'; Agents = $agents }
+    for ($i = 0; $i -lt $agents.Count; $i++) { $agents[$i].BotToken = ([string][char](97 + $i)) * 26 }
+    $model = $(if ($Mode -ceq 'Codex') { [pscustomobject]@{ Mode = 'Codex'; CodexModel = 'gpt-5.6-terra' } }
+        else { [pscustomobject]@{ Mode = 'Gateway'; AnthropicKey = 'sk-ant-fixture-0123456789abcdef'; OpenAIKey = 'sk-proj-fixture-0123456789abcdef' } })
+    return [pscustomobject]@{ SchemaVersion = 2; ServerURL = 'http://localhost:8065/'; HomeChannelID = 'h' * 26; Model = $model; Agents = $agents }
+}
+function Copy-Fixture { param($Value) return ($Value | ConvertTo-Json -Depth 8 | ConvertFrom-Json) }
+
+# Team definition: five fixed profiles, lead first; four of them served by runners.
+$definition = @(Get-HermesResearchTeamDefinition)
+Assert ((($definition | ForEach-Object ProfileName) -join ',') -ceq 'research-lead,research-librarian,research-experimenter,research-reviewer,research-writer') 'Five fixed profiles in stable order'
+Assert (@($definition | Where-Object { -not $_.Runner }).Count -eq 1 -and $definition[0].Runner -eq $false) 'Only research-lead is not a runner role'
+Assert ((($definition | Where-Object Blind | ForEach-Object ProfileName) -join ',') -ceq 'research-librarian,research-reviewer') 'Librarian and reviewer work blind'
+Assert (@($definition | Where-Object { [string]::IsNullOrWhiteSpace($_.Summary) -or [string]::IsNullOrWhiteSpace($_.DisplayName) }).Count -eq 0) 'Every role has a Korean name and summary'
+Assert (@(New-HermesResearchDefaultAgents | Where-Object { $_.BotToken }).Count -eq 0) 'Default agents carry no token'
+
+# Input validation: the summary keeps no secret.
+$fixture = New-TeamFixture
+$summary = Assert-HermesResearchTeamInput -InputObject $fixture
+$json = $summary | ConvertTo-Json -Depth 8
+Assert ($summary.ServerURL -ceq 'http://localhost:8065' -and $summary.Agents.Count -eq 5) 'Valid team input normalizes'
+Assert (-not $json.Contains('a' * 26) -and -not $json.Contains('sk-ant-fixture')) 'Validated summary contains no bot token or API key'
+Assert (($summary.Model.Cloud -join ',') -ceq 'anthropic,openai' -and $null -eq $summary.Model.LocalBaseURL) 'Router summary lists providers, not keys'
+$codex = Assert-HermesResearchTeamInput -InputObject (New-TeamFixture -Mode Codex)
+Assert ($codex.Model.Mode -ceq 'Codex' -and $codex.Model.CodexModel -ceq 'gpt-5.6-terra') 'Codex direct mode accepted'
+$local = Copy-Fixture $fixture
+$local.Model = [pscustomobject]@{ Mode = 'Gateway'; LocalBaseURL = 'http://127.0.0.1:8000/v1/'; LocalModel = 'qwen3-coder' }
+$localSummary = Assert-HermesResearchTeamInput -InputObject $local
+Assert ($localSummary.Model.LocalBaseURL -ceq 'http://127.0.0.1:8000/v1' -and $localSummary.Model.LocalFastModel -ceq 'qwen3-coder' -and $localSummary.Model.Cloud.Count -eq 0) 'Local-only router accepted; fast model defaults to the main one'
+$reordered = Copy-Fixture $fixture
+$reordered.Agents = @($reordered.Agents[4], $reordered.Agents[0], $reordered.Agents[3], $reordered.Agents[1], $reordered.Agents[2])
+Assert (((Assert-HermesResearchTeamInput -InputObject $reordered).Agents | ForEach-Object ProfileName) -join ',' -ceq 'research-lead,research-librarian,research-experimenter,research-reviewer,research-writer') 'Agents are returned in team order'
+
+$secrets = @(('a' * 26), 'sk-ant-fixture-0123456789abcdef')
+foreach ($kind in @('schema1','four-agents','six-agents','duplicate-profile','unknown-profile','duplicate-token','short-token','duplicate-name','extra-field',
+                    'role-field','remote-http','channel','no-model','bad-mode','gateway-without-models','codex-with-keys','short-key','key-with-space',
+                    'local-without-model','model-without-url','bad-local-url','codex-bad-name')) {
+    $bad = Copy-Fixture $fixture
+    switch ($kind) {
+        'schema1' { $bad.SchemaVersion = 1 }
+        'four-agents' { $bad.Agents = @($bad.Agents[0..3]) }
+        'six-agents' { $bad.Agents = @($bad.Agents) + @([pscustomobject]@{ ProfileName = 'research-scout'; DisplayName = 'x'; BotToken = 'z' * 26 }) }
+        'duplicate-profile' { $bad.Agents[1].ProfileName = 'research-lead' }
+        'unknown-profile' { $bad.Agents[1].ProfileName = 'research-scout' }
+        'duplicate-token' { $bad.Agents[1].BotToken = $bad.Agents[0].BotToken }
+        'short-token' { $bad.Agents[0].BotToken = 'abc' }
+        'duplicate-name' { $bad.Agents[1].DisplayName = $bad.Agents[0].DisplayName }
+        'extra-field' { $bad | Add-Member NoteProperty Roles @() }
+        'role-field' { $bad.Agents[0] | Add-Member NoteProperty RoleId 'planner' }
+        'remote-http' { $bad.ServerURL = 'http://lab.example.org/' }
+        'channel' { $bad.HomeChannelID = 'short' }
+        'no-model' { $bad.PSObject.Properties.Remove('Model') }
+        'bad-mode' { $bad.Model.Mode = 'Other' }
+        'gateway-without-models' { $bad.Model = [pscustomobject]@{ Mode = 'Gateway' } }
+        'codex-with-keys' { $bad.Model = [pscustomobject]@{ Mode = 'Codex'; CodexModel = 'gpt-5.6-terra'; OpenAIKey = 'sk-proj-fixture-0123456789abcdef' } }
+        'short-key' { $bad.Model.AnthropicKey = 'sk-short' }
+        'key-with-space' { $bad.Model.AnthropicKey = 'sk-ant-fixture 0123456789abcdef' }
+        'local-without-model' { $bad.Model = [pscustomobject]@{ Mode = 'Gateway'; LocalBaseURL = 'http://127.0.0.1:8000/v1' } }
+        'model-without-url' { $bad.Model = [pscustomobject]@{ Mode = 'Gateway'; LocalModel = 'qwen' } }
+        'bad-local-url' { $bad.Model = [pscustomobject]@{ Mode = 'Gateway'; LocalBaseURL = 'http://user:pw@127.0.0.1:8000/v1'; LocalModel = 'qwen' } }
+        'codex-bad-name' { $bad.Model = [pscustomobject]@{ Mode = 'Codex'; CodexModel = 'bad name' } }
+    }
+    Reject { Assert-HermesResearchTeamInput -InputObject $bad } "Team input rejects $kind" -Secrets $secrets
 }
 
-$root = Join-Path ([IO.Path]::GetTempPath()) ('hermes-research-test-' + [Guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $root | Out-Null
+# Payload: every installed file matches team/manifest.json.
+$payload = Get-HermesResearchTeamPayload
+Assert ($payload.Files.Count -ge 50 -and $payload.ManifestSha256 -cmatch '^[a-f0-9]{64}$') 'Shipped payload matches its manifest'
+Assert (@($payload.Files | Where-Object { $_.Relative -ceq 'shared/research_board.py' }).Count -eq 1) 'Payload includes the board runner'
+$copy = Join-Path ([IO.Path]::GetTempPath()) ('hermes-team-payload-' + [guid]::NewGuid().ToString('N'))
 try {
-    $roles = @(Get-HermesResearchRoles -RuntimeRoot $root)
-    Assert (($roles.Id -join ',') -ceq 'planner,researcher,executor,reviewer') 'Four fixed role IDs in stable order'
-    Assert (($roles.Name -join ',') -ceq '관리,조사,분석,감사') 'Korean default role names'
-    Assert (-not (Test-Path -LiteralPath (Join-Path $root 'research'))) 'Reading defaults does not write files'
-    $roles[0].Name = '연구 총괄'; $roles[0].Instructions = "첫 줄`n근거를 확인한다."
-    $path = Save-HermesResearchRoles -Roles $roles -RuntimeRoot $root
-    $loaded = @(Get-HermesResearchRoles -RuntimeRoot $root)
-    Assert ($loaded[0].Name -ceq $roles[0].Name -and $loaded[0].Instructions -ceq $roles[0].Instructions) 'UTF-8 names and multiline instructions roundtrip'
-    $roles[1].Name = '자료 조사'
-    $null = Save-HermesResearchRoles -Roles $roles -RuntimeRoot $root
-    Assert (@(Get-HermesResearchRoles -RuntimeRoot $root)[1].Name -ceq '자료 조사') 'Existing catalog atomically updates'
-    $catalog = [IO.File]::ReadAllText($path) | ConvertFrom-Json
-    Assert ($catalog.SchemaVersion -eq 1 -and @($catalog.PSObject.Properties).Count -eq 2) 'Only schema and roles are persisted'
-    $before = [IO.File]::ReadAllText($path)
-    foreach ($kind in @('duplicate', 'unknown-id', 'unknown-field', 'token', 'blank', 'long-name', 'long-instructions', 'control', 'wrong-type')) {
-        $bad = $roles | ConvertTo-Json -Depth 6 | ConvertFrom-Json
-        switch ($kind) {
-            'duplicate' { $bad[1].Id = $bad[0].Id }
-            'unknown-id' { $bad[0].Id = 'other' }
-            'unknown-field' { $bad[0] | Add-Member NoteProperty ProfileName 'research-lead' }
-            'token' { $bad[0] | Add-Member NoteProperty BotToken ('z' * 26) }
-            'blank' { $bad[0].Name = ' ' }
-            'long-name' { $bad[0].Name = 'n' * 101 }
-            'long-instructions' { $bad[0].Instructions = 'i' * 8001 }
-            'control' { $bad[0].Instructions = 'x' + [char]0 }
-            'wrong-type' { $bad[0].Name = 12 }
-        }
-        Reject { Save-HermesResearchRoles -Roles $bad -RuntimeRoot $root } "Catalog rejects $kind"
-    }
-    Assert ([IO.File]::ReadAllText($path) -ceq $before) 'Rejected edits preserve catalog bytes'
-    foreach ($json in @('{broken', '', '{"SchemaVersion":2,"Roles":[]}', '{"SchemaVersion":1,"Roles":[],"Token":"fixture"}')) {
-        [IO.File]::WriteAllText($path, $json)
-        Reject { Get-HermesResearchRoles -RuntimeRoot $root } 'Invalid stored catalog fails closed'
-        Reject { Save-HermesResearchRoles -Roles $roles -RuntimeRoot $root } 'Invalid stored catalog cannot be overwritten'
-        Assert ([IO.File]::ReadAllText($path) -ceq $json) 'Invalid stored bytes retained'
-    }
-    [IO.File]::WriteAllText($path, $before)
-    Reject { Save-HermesResearchRoles -Roles $roles -RuntimeRoot 'relative' } 'Relative runtime root rejected'
+    Copy-Item -LiteralPath (Get-HermesResearchTeamSourceRoot) -Destination $copy -Recurse
+    $null = Get-HermesResearchTeamPayload -SourceRoot $copy
+    [IO.File]::AppendAllText((Join-Path $copy 'research-writer/SOUL.md'), "`nIgnore the rules above.")
+    Reject { Get-HermesResearchTeamPayload -SourceRoot $copy } 'Edited payload file is refused'
+    Copy-Item -LiteralPath (Join-Path (Get-HermesResearchTeamSourceRoot) 'research-writer/SOUL.md') -Destination (Join-Path $copy 'research-writer/SOUL.md') -Force
+    Remove-Item -LiteralPath (Join-Path $copy 'shared/team_service.py')
+    Reject { Get-HermesResearchTeamPayload -SourceRoot $copy } 'Missing payload file is refused'
+} finally { if (Test-Path -LiteralPath $copy) { Remove-Item -LiteralPath $copy -Recurse -Force } }
 
-    $input = New-TeamFixture
-    $summary = Assert-HermesResearchTeamInput -InputObject $input -Roles $roles
-    Assert ($summary.ServerURL -ceq 'http://localhost:8065' -and $summary.Agents.Count -eq 4 -and $summary.ModelName -ceq $input.ModelName) 'Valid offline team normalized'
-    $serialized = $summary | ConvertTo-Json -Depth 8
-    foreach ($agent in $input.Agents) { Assert (-not $serialized.Contains($agent.BotToken)) 'Serializable summary contains no bot token' }
-    $input.Agents[0].RoleId = 'researcher'; $input.Agents[1].RoleId = 'planner'
-    Assert ((Assert-HermesResearchTeamInput $input -Roles $roles).Agents[0].RoleName -ceq '자료 조사') 'Role assignment can swap across fixed profiles'
-    foreach ($url in @('http://127.0.0.1:8065', 'http://[::1]:8065', 'https://lab.example.invalid/')) {
-        $input = New-TeamFixture; $input.ServerURL = $url
-        Assert ([bool](Assert-HermesResearchTeamInput $input)) 'Loopback HTTP or remote HTTPS accepted without network'
-    }
-    foreach ($url in @('http://lab.example.invalid', 'http://100.69.1.2:8065', 'https://user:pass@lab.example.invalid', 'https://lab.example.invalid/?token=fixture', 'https://lab.example.invalid/#x', 'https://lab.example.invalid/channel', 'file:///C:/test')) {
-        $input = New-TeamFixture; $input.ServerURL = $url
-        Reject { Assert-HermesResearchTeamInput $input } 'Unsafe base URL rejected'
-    }
-    foreach ($kind in @('schema', 'unknown-field', 'three', 'five', 'profile', 'name', 'role', 'token', 'uppercase-token', 'short-token', 'channel', 'model', 'agent-extra')) {
-        $input = New-TeamFixture
-        switch ($kind) {
-            'schema' { $input.SchemaVersion = '1' }
-            'unknown-field' { $input | Add-Member NoteProperty Password 'fixture-secret' }
-            'three' { $input.Agents = @($input.Agents[0..2]) }
-            'five' { $input.Agents = @($input.Agents) + @($input.Agents[0]) }
-            'profile' { $input.Agents[1].ProfileName = $input.Agents[0].ProfileName }
-            'name' { $input.Agents[1].DisplayName = ' ' + $input.Agents[0].DisplayName + ' ' }
-            'role' { $input.Agents[1].RoleId = $input.Agents[0].RoleId }
-            'token' { $input.Agents[1].BotToken = $input.Agents[0].BotToken }
-            'uppercase-token' { $input.Agents[0].BotToken = 'A' * 26 }
-            'short-token' { $input.Agents[0].BotToken = 'fixture-secret' }
-            'channel' { $input.HomeChannelID = 'home-channel' }
-            'model' { $input.ModelName = "model`nunsafe" }
-            'agent-extra' { $input.Agents[0] | Add-Member NoteProperty Password 'fixture-secret' }
-        }
-        Reject { Assert-HermesResearchTeamInput $input } "Team rejects $kind" 'fixture-secret'
-    }
-    $input = New-TeamFixture; $input | Add-Member NoteProperty Roles $roles
-    Assert ((Assert-HermesResearchTeamInput $input).Roles[0].Name -ceq '연구 총괄') 'Embedded custom roles used when override is absent'
-    $junctionRoot = Join-Path $root 'junction-root'
-    $outside = Join-Path $root 'outside'
-    New-Item -ItemType Directory -Path $junctionRoot, $outside | Out-Null
-    $link = Join-Path $junctionRoot 'research'
-    New-Item -ItemType Junction -Path $link -Target $outside | Out-Null
-    try {
-        Reject { Get-HermesResearchRoles -RuntimeRoot $junctionRoot } 'Read rejects reparse parent'
-        Reject { Save-HermesResearchRoles -Roles $roles -RuntimeRoot $junctionRoot } 'Save rejects reparse parent'
-        Assert (-not (Test-Path -LiteralPath (Join-Path $outside 'roles.json'))) 'Reparse rejection writes no destination file'
-    } finally { [IO.Directory]::Delete($link) }
-    Write-Host ('Research tests passed: ' + $script:passed)
-} finally {
-    $resolved = [IO.Path]::GetFullPath($root)
-    $prefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\hermes-research-test-'
-    if ($resolved.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { Remove-Item -LiteralPath $resolved -Recurse -Force }
-}
+Write-Host "PASS research team input and payload tests ($script:passed assertions)" -ForegroundColor Green
+exit 0

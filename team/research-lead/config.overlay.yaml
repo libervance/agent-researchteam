@@ -1,0 +1,11 @@
+# Merged into ~/.hermes/profiles/research-lead/config.yaml by install.sh.
+# Model/provider: the gateway overlay, or (without it) copied from the default profile at creation.
+terminal:
+  cwd: "__WORKSPACE__"   # the folder holding your clones of the paper repos (and _template/)
+agent:
+  # The lead hands work to the other devices through the board, not in-process subagents.
+  disabled_toolsets: [delegation]
+display:
+  # A message that arrives while the lead is mid-dispatch waits for the turn to finish
+  # instead of interrupting it halfway through creating a round's tasks.
+  busy_input_mode: queue

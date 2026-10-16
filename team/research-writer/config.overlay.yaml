@@ -1,0 +1,8 @@
+# Merged into ~/.hermes/profiles/research-writer/config.yaml by install.sh.
+# Strongest model you have — the Claude harness ran this role on Opus. Uncomment to pin:
+# model: anthropic/claude-opus-5-5
+terminal:
+  cwd: "."              # the runner starts hermes inside the paper clone
+  timeout: 600          # latexmk on a full paper can exceed the 180 s default
+agent:
+  disabled_toolsets: [delegation, cronjob, messaging]

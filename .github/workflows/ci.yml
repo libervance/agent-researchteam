@@ -134,23 +134,26 @@ jobs:
         shell: powershell
         run: powershell.exe -NoLogo -NoProfile -STA -ExecutionPolicy Bypass -File .\tests\Run-DistributionTests.ps1
 
-      - name: Local four-agent research setup tests
+      - name: Local five-agent research team setup tests
         shell: powershell
         run: |
           .\tests\Run-DockerTests.ps1
           .\tests\Run-DockerCliTests.ps1
           .\tests\Run-ResearchTests.ps1
-          .\tests\Run-ResearchPersonaTests.ps1
           .\tests\Run-ResearchRuntimeTests.ps1
           .\tests\Run-ResearchDefaultsTests.ps1
           .\tests\Run-ResearchMigrationTests.ps1
           powershell.exe -NoLogo -NoProfile -STA -ExecutionPolicy Bypass -File .\HermesResearchSetup.Gui.ps1 -SmokeTest
 
-      - name: Offline research permissions, broker and Hermes worker tests
+      - name: Offline research team tests (board runner, team service, model router)
         shell: powershell
         run: |
-          python -m pip install ruamel.yaml==0.18.17
+          python -m pip install pyyaml==6.0.3 pytest==8.4.2
+          python -B team/build_manifest.py --check
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           python -B -m unittest discover -s tests -p 'test_research_*.py' -v
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          python -B -m pytest -q -p no:cacheprovider team/gateway/test_policy.py
 
       - name: Local research tests on PowerShell 7
         shell: pwsh

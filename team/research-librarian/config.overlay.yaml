@@ -1,0 +1,6 @@
+# Merged into ~/.hermes/profiles/research-librarian/config.yaml by install.sh.
+terminal:
+  cwd: "."              # the runner starts hermes inside a snapshot of the paper
+agent:
+  # The bibliography audit is part of the blind round; no memory across papers or rounds.
+  disabled_toolsets: [memory, session_search, delegation, cronjob, messaging]
