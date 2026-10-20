@@ -108,6 +108,7 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
         if ($args[0] -like '*render_config.py') { [IO.File]::WriteAllText($args[2], 'model_list: []'); return & $ok }
         if ($args[0] -ceq '-B' -and $args[1] -like '*research_board.py') {
             if ($args[2] -ceq 'init') { New-Item -ItemType Directory -Path (Join-Path $args[3] '.git') -Force | Out-Null }
+            if ($args[2] -ceq 'locations') { [IO.File]::WriteAllText((Join-Path $args[4] 'RESEARCH_PATHS.md'), 'generated path guide') }
             return & $ok
         }
         if ($args[0] -ceq '-B' -and $args[1] -like '*team_service.py') { return & $ok 'stop requested' }
@@ -133,6 +134,7 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
             $config = Get-ChildItem -LiteralPath $script:fixtureRoot -Recurse -Filter 'service.json' | Sort-Object LastWriteTime | Select-Object -Last 1
             $service = [IO.File]::ReadAllText($config.FullName) | ConvertFrom-Json
             $children = @($service.runners | ForEach-Object { @{ name = ($_.role + '-' + $_.slot); state = 'running' } })
+            if ($service.coordinator.enabled) { $children += @{ name = 'lead-coordinator'; state = 'running' } }
             if ($null -ne $service.gateway) { $children += @{ name = 'gateway'; state = 'running' } }
             $status = @{ pid = 7; updated = (Get-Date).ToUniversalTime().AddSeconds(2).ToString('o'); gateway = @{ ok = [bool]$script:serviceGatewayOK -or $null -eq $service.gateway; detail = 'fixture' }; children = $children }
             [IO.File]::WriteAllText((Join-Path $service.team_home 'service-status.json'), ($status | ConvertTo-Json -Depth 4))
@@ -175,7 +177,8 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
         Assert ([IO.File]::ReadAllText((Join-Path $research 'team\shared\team-home.txt')) -ceq $research) 'Runner records its team home'
         $service = [IO.File]::ReadAllText((Join-Path $research 'service.json')) | ConvertFrom-Json
         Assert (@($service.runners).Count -eq 5 -and @($service.runners | Where-Object role -ceq 'research-reviewer').Count -eq 2 -and $service.runners[0].task_timeout -eq 10800) 'Service runs librarian, experimenter, writer and two referee slots with the chosen time limit'
-        Assert ($service.gateway.port -eq 18400 -and (Get-Content -Raw (Join-Path $research 'service.json')) -notmatch 'sk-ant|' + ('a' * 26)) 'Service config names the router and carries no secret'
+        Assert ($service.coordinator.enabled -and $service.coordinator.task_timeout -eq 1200) 'Service starts the private lead coordinator'
+        Assert ($service.gateway.port -eq 18400 -and (Get-Content -Raw -LiteralPath (Join-Path $research 'service.json')) -notmatch 'sk-ant|' + ('a' * 26)) 'Service config names the router and carries no secret'
         $secrets = Read-Env (Join-Path $research 'private\service.env')
         Assert ($secrets['MATTERMOST_TOKEN__research-writer'] -ceq ('e' * 26) -and -not $secrets.ContainsKey('MATTERMOST_TOKEN__research-lead') -and $secrets['RESEARCH_GATEWAY_SECRET'] -cmatch '^[a-f0-9]{48}$') 'Each runner gets its own bot token; the lead''s stays in its profile'
         $gwEnv = Read-Env (Join-Path $research 'gateway\env')
@@ -185,7 +188,8 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
         Assert (@($script:tasks.Keys).Count -eq 2 -and @($script:tasks.Values | Where-Object { $_.State -ceq 'Running' }).Count -eq 2) 'Two owned logon tasks registered and running: team service and lead chat'
         $leadTask = @($script:tasks.Values | Where-Object { $_.TaskName -like '*lead chat' })[0]
         Assert ($leadTask.Description -like 'HermesEasySetup.ResearchTeam.v2; owner=*; profile=research-lead') 'Lead chat task is owned by this team'
-        Assert ((Test-Path -LiteralPath (Join-Path $paths.Workspace '_template\CLAUDE.md')) -and (Test-Path -LiteralPath (Join-Path $paths.Workspace 'reports\.git')) -and (Test-Path -LiteralPath (Join-Path $paths.Workspace '.hermes.md'))) 'Workspace gets _template, team context and the reports board'
+        Assert ((Test-Path -LiteralPath (Join-Path $paths.Workspace '_template\CLAUDE.md')) -and (Test-Path -LiteralPath (Join-Path $paths.Workspace 'reports\.git')) -and (Test-Path -LiteralPath (Join-Path $paths.Workspace 'reports\.tasks\project.json')) -and (Test-Path -LiteralPath (Join-Path $paths.Workspace '.hermes.md'))) 'Workspace gets _template, team context and the reports board'
+        Assert ($result.LocationsPath -ceq (Join-Path $paths.Workspace 'RESEARCH_PATHS.md') -and (Test-Path -LiteralPath $result.LocationsPath -PathType Leaf) -and [IO.File]::ReadAllText((Join-Path $research 'workspace-root.txt'), [Text.Encoding]::UTF8).Trim() -ceq $paths.Workspace) 'Install reports the generated location guide and remembers the workspace'
         $state = [IO.File]::ReadAllText((Join-Path $research 'team.json')) | ConvertFrom-Json
         Assert ($state.Manager -ceq 'HermesEasySetup.ResearchTeam.v2' -and @($state.Profiles).Count -eq 5 -and ($state | ConvertTo-Json -Depth 8) -notmatch ('a' * 26)) 'Team record has five profiles and no secret'
 

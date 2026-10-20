@@ -15,6 +15,7 @@ service.json (written by the installer; no secrets):
   {"team_home", "hermes_home", "python", "hermes", "board", "papers_file",
    "secrets_file",                       # KEY=VALUE file, readable only by this user
    "runners": [{"role", "slot", "task_timeout", "heartbeat"}],
+   "coordinator": {"enabled": true, "task_timeout": 1200},
    "gateway": null | {"dir", "port", "litellm"}}
 secrets_file holds MATTERMOST_URL, MATTERMOST_TOKEN__<role> (one bot per role),
 RESEARCH_GATEWAY_SECRET and RESEARCH_GATEWAY_URL; the gateway's provider keys live in
@@ -192,6 +193,15 @@ def children(cfg):
                 "--task-timeout", str(r.get("task_timeout", 10800)), "--heartbeat", str(r.get("heartbeat", 1800)),
                 "--status-file", str(home / "run" / f"{name}.json")]
         out.append(Child(name, argv, env, str(home), home / "logs" / f"{name}.log"))
+    coordinator = cfg.get("coordinator") or {}
+    if coordinator.get("enabled"):
+        env = dict(base)
+        for k in ("RESEARCH_GATEWAY_SECRET", "RESEARCH_GATEWAY_URL"):
+            if secrets.get(k):
+                env[k] = secrets[k]
+        argv = [cfg["python"], cfg["board"], "coordinate", "--papers-file", cfg["papers_file"],
+                "--hermes", cfg["hermes"], "--task-timeout", str(coordinator.get("task_timeout", 1200))]
+        out.append(Child("lead-coordinator", argv, env, str(home), home / "logs" / "lead-coordinator.log"))
     return out
 
 

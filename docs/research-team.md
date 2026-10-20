@@ -30,13 +30,39 @@ Scenarios:
 
 Every paper (and the shared `reports/` folder) is a git repo in the workspace whose remote
 is a bare repo under `RuntimeRoot\research\boards`. A task is a file `.tasks/<id>.md`.
-`research_board.py` is the board: the lead creates tasks (`new`, with `--after`
+These remotes are local Git repositories, not GitHub repositories. An existing `origin`
+can be used instead, but the wizard does not create GitHub repositories, configure their
+permissions, or synchronize the local `papers` registry to other PCs.
+`research_board.py project-create <name>` scaffolds, initializes, binds and registers a
+paper in one repeatable step. Its default remote is local; `--remote <url>` uses an
+existing shared remote. `research_board.py` is the board: the lead creates tasks (`new`, with `--after`
 dependencies), a runner per role (`run`) claims a ready task by pushing `status: running`,
 runs `hermes -p <role> chat -Q --query-file <prompt>` once with the role's skills
 preloaded, commits only that role's output paths plus the task file and one ledger line,
-and posts progress into the task's Mattermost thread as its own bot. `init` gives a new
-folder its board and registers it in `research\papers`, which the runners re-read on every
-pass.
+and maintains one progress post per task in its Mattermost thread as its own bot. `init`
+remains available for manual registration of existing repositories. Runners re-read
+`research\papers` on every pass.
+
+The lead alone has an interactive Mattermost gateway. The other four profiles run only
+as background board tasks; their bot tokens let the runners post progress to Mattermost.
+A private lead coordinator reads new ledger results and invokes a bounded lead turn against
+the board. It can plan the next authorized task without an agent-to-agent Mattermost mention.
+Human approvals and review checkpoints still wait for the user's response.
+
+Hermes profiles explicitly allow 80 tool turns per attempt. A worker that hits that limit
+or the task's wall-clock limit saves a `partial` result and a versioned checkpoint under
+`.tasks/attempts/`. Read/write roles may resume once from their files and checkpoint;
+experimenter tasks default to manual continuation so an experiment is not relaunched
+outside its approved retry policy. Dependent tasks require `done`.
+If a background lead turn reaches its own limit, its output is saved under
+`research/run/lead-attempts/`; the coordinator advances that event and asks the user to
+resume with the interactive lead. It does not treat a capped lead turn as completed work.
+
+The setup writes `RESEARCH_PATHS.md` in the selected workspace. It lists the current
+project folders and remotes, board and ledger locations, team runtime, logs, profiles,
+and server deployment root. `research_board.py project-create` refreshes it for new projects;
+`research_board.py locations --write` refreshes it on demand. The wizard shows the full
+path to the guide after setup.
 
 Blind roles (reviewer, librarian) run in an exported snapshot without `.git` or `.tasks/`.
 An experiment's `protocol.md` is frozen once `approval.md` exists; an edit is reverted and

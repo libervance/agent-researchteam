@@ -210,7 +210,13 @@ function Install-HermesResearchWorkspace {
     New-Item -ItemType Directory -Path (Join-Path $WorkspacePath '.scratch') -Force | Out-Null
     $reports = Join-Path $WorkspacePath 'reports'
     $board = Join-Path $TeamRoot 'shared\research_board.py'
-    if (-not (Test-Path -LiteralPath $reports)) { Copy-Item -LiteralPath (Join-Path $TeamRoot 'reports-template') -Destination $reports -Recurse -ErrorAction Stop }
+    if (-not (Test-Path -LiteralPath $reports)) {
+        Copy-Item -LiteralPath (Join-Path $TeamRoot 'reports-template') -Destination $reports -Recurse -ErrorAction Stop
+        $markerDir = Join-Path $reports '.tasks'
+        New-Item -ItemType Directory -Path $markerDir -Force | Out-Null
+        $marker = [ordered]@{ schema = 1; name = 'reports'; created = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') }
+        Write-HermesResearchAtomicText -LiteralPath (Join-Path $markerDir 'project.json') -Text (($marker | ConvertTo-Json -Compress) + "`n")
+    }
     foreach ($arguments in @(@('init', $reports), @('setup', $reports, '--channel', $ChannelID, '--mention', $Mention))) {
         $result = Invoke-HermesProcess -FilePath $Python -ArgumentList (@('-B', $board) + $arguments) -WorkingDirectory $WorkspacePath -Environment $Environment -TimeoutSeconds 120
         if (-not $result.Started -or $result.TimedOut -or $result.ExitCode -ne 0) { throw ('ResearchReportsBoard' + $arguments[0] + 'Failed') }

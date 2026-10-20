@@ -86,6 +86,16 @@ class ServiceTests(unittest.TestCase):
                 with self.assertRaises(OSError):
                     os.kill(pid, 0)
 
+    def test_coordinator_child_gets_gateway_secret_without_bot_token(self):
+        import team_service_under_test as service
+        cfg = json.loads(self.cfg.read_text(encoding="utf-8"))
+        cfg["coordinator"] = {"enabled": True, "task_timeout": 1200}
+        lead = [child for child in service.children(cfg) if child.name == "lead-coordinator"]
+        self.assertEqual(1, len(lead))
+        self.assertEqual("s3", lead[0].env["RESEARCH_GATEWAY_SECRET"])
+        self.assertNotIn("MATTERMOST_TOKEN", lead[0].env)
+        self.assertIn("coordinate", lead[0].argv)
+
 
 import importlib.util as _u  # noqa: E402
 _spec = _u.spec_from_file_location("team_service_under_test", SERVICE)

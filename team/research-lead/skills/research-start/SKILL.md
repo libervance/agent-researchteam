@@ -18,7 +18,7 @@ Five stages, each ending in a file on disk, so any session can resume from what 
 | 1 Scope | `<paper>/CLAUDE.md` filled, `<paper>/notes/prior-art.md` | you with the user; a `research-librarian` task |
 | 2 Claims and evidence plan | `<paper>/claims.md` rows + experiment plan | you with the user |
 | 3 Outline | `<paper>/outline.md` | a `research-writer` task |
-| 4 Draft | `<paper>/paper/sections/*.tex`, clean build | a chain of `research-writer` tasks (or the user in `research-writer chat` on the writer's device) |
+| 4 Draft | `<paper>/paper/sections/*.tex`, clean build | a chain of `research-writer` board tasks |
 | 5 Handoff | review-ready draft | → `research-round` |
 
 **Execution mode:** mixed. Stages 1–2 are a conversation between you (research-lead) and the
@@ -34,9 +34,8 @@ temp file, idempotent `--id`, waiting with `"${PB[@]}" wait` — are the same as
 PB=("__PYTHON__" "__RESEARCH_BOARD__")   # a bash array: paths may contain spaces
 ```
 
-Open one Mattermost thread per stage that creates tasks (`TH=$("${PB[@]}" thread <paper> "Stage 1 —
-prior art")`, likewise Stage 3 and Stage 4) and pass `--thread $TH` to its tasks; bind the
-paper to its channel with `"${PB[@]}" setup` right after scaffolding. Over Mattermost, never wait
+Open one Mattermost thread per stage that creates tasks (`TH=$("${PB[@]}" thread <paper> "Stage 1 — prior art")`,
+likewise Stage 3 and Stage 4) and pass `--thread $TH` to its tasks. Over Mattermost, never wait
 inside a turn: dispatch, reply briefly, end the turn — the runners report into the thread.
 
 You never write under `<paper>/paper/` — the manuscript belongs to `research-writer`. Everything
@@ -46,11 +45,10 @@ else in the paper folder (`CLAUDE.md`, `claims.md`, `notes/`) you may write duri
 ## Step 0 — Where are we?
 
 1. **Paper folder.** If the user named none and none fits, propose a short kebab-case name
-   and scaffold: `cp -R _template <name> && "${PB[@]}" init <name>` — that makes it a git
-   repo with its own board and registers it, so the runners on this PC serve it on their
-   next pass. (On separate devices, give it an empty remote every device can push to
-   *before* `init` — `git -C <name> init -b main && git -C <name> remote add origin <url>`
-   — and tell the user to add that URL to the other devices' papers lists.) If several
+   and run `"${PB[@]}" project-create <name>`. This creates the folder, board, local Git
+   remote and Mattermost binding and registers the remote for this PC's runners. For work
+   across devices, use `project-create <name> --remote <existing-shared-git-url>` and tell
+   the user to register that URL on the other devices. If several
    papers exist, ask which.
 2. **Resume point** — the first stage whose output is missing:
    - `<paper>/CLAUDE.md` still has `<paper working title>` or `NeurIPS 20XX` → Stage 1
@@ -72,7 +70,7 @@ else in the paper folder (`CLAUDE.md`, `claims.md`, `notes/`) you may write duri
    `<paper>/CLAUDE.md` to `public` or `air-gapped`, or leave the template's default, before
    the first task is created — it decides where every later model call goes.
 2. Create a `research-librarian` task on the **closest prior art to the candidate
-   contribution**, not the whole field — `--id s1-prior-art --skills lit-search,lit-review
+   contribution**, not the whole field — `--id s1-prior-art --skills lit-search,lit-review --gate human
    --expects notes/prior-art.md,notes/prior-art.bib`:
 
    > Discovery mode (load the `lit-review` skill). Find the 5–10 papers closest to this
@@ -121,7 +119,7 @@ editing it.
 
 ## Stage 3 — Outline
 
-Create a `research-writer` task, `--id s3-outline --expects outline.md`:
+Create a `research-writer` task, `--id s3-outline --expects outline.md --gate human`:
 
 > Read `CLAUDE.md`, `claims.md` and `notes/prior-art.md`. Write `outline.md`: the section list with a page
 > budget per section within the venue limit; per section, its paragraphs as one-line claims
@@ -129,18 +127,14 @@ Create a `research-writer` task, `--id s3-outline --expects outline.md`:
 > it will come from (or `pending C<n>`). Do not write LaTeX yet.
 
 Show the user the outline (after `git -C <paper> pull`). **Gate:** the user approves it.
-Edits go back as a new `research-writer` task (`--id s3-outline-rev<k>`) quoting the user's
+Edits go back as a new `research-writer` task (`--id s3-outline-rev<k> --gate human`) quoting the user's
 requested changes.
 
 ## Stage 4 — Draft
 
-Offer the user the choice once:
-
-- **Co-write** — they DM the `research-writer-chat` bot in Mattermost (or run `research-writer
-  chat` on the writer's device) and draft with the writer directly: one live session keeps
-  voice and takes feedback immediately, and the chat writer commits and pushes itself. You
-  step back until they say the draft is done, then pull and go to Stage 5.
-- **Hands-off** (default) — you run the chain below.
+Create the writer task chain below. If the user wants to co-write, collect their feedback
+through your chat and put it in new writer board tasks. Only your chat gateway accepts user
+instructions; the writer bot posts progress but does not receive chat requests.
 
 **Order:** method → experiments → related work → introduction → conclusion → abstract. The
 method is what the paper is; the introduction and abstract can only promise what the

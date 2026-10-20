@@ -21,18 +21,20 @@ R=reports                                 # the shared reports folder in your wo
 
 Task bodies go in `.scratch/<id>.md` (relative to your workspace) and are passed with
 `--body-file`. `new` is idempotent on `--id`, so a resumed run never double-dispatches.
-Over Mattermost, never wait inside a turn: dispatch, reply in two lines, end the turn — the
-runners report into the thread and ping the user.
+Over Mattermost, never wait inside a turn: dispatch, reply in two lines, end the turn. The
+runners post progress in the thread. The private lead coordinator reads each completed audit
+and resumes the lead's work on the board before creating a revision or delivering the report.
 
 ## Step 0 — Where to work
 
 - The default folder is `reports/` in your workspace (installed with its own board; public).
-  If it is missing: `cp -R _template reports`, set its `CLAUDE.md` title to "Reports" and
-  `**Sensitivity:** public`, then `"${PB[@]}" init reports`.
-- If the user says the topic or their material is confidential, make a separate folder
-  `report-<slug>` the same way with `**Sensitivity:** private` (or `air-gapped`) — never
-  put it in `reports/`. Without local models the runners will refuse it and say so; tell
-  the user that instead of working around it.
+  If it is missing, run `"${PB[@]}" project-create reports`, set its `CLAUDE.md` title to
+  "Reports" and `**Sensitivity:** public`, then publish `CLAUDE.md`.
+- If the user says the topic or their material is confidential, run
+  `"${PB[@]}" project-create report-<slug>`, set and publish its `CLAUDE.md` sensitivity as
+  `private` (or `air-gapped`) before creating a task — never put it in `reports/`. Without
+  local models the runners will refuse it and say so; tell the user that instead of
+  working around it.
 - `<slug>`: short kebab-case of the topic, plus `-2`, `-3` if it exists
   (`ls $R/notes/`). Everything for this report lives under `notes/<slug>/` and
   `reviews/<slug>/`.
@@ -67,14 +69,15 @@ run it first with the channel the user is in).
 ## Step 3 — Audit (research-reviewer)
 
 `--id rep-<slug>-audit-1 --assignee research-reviewer --skills report-audit --after
-rep-<slug>-draft --expects reviews/<slug>/audit-1.md --thread $TH`, body (fixed — add
+rep-<slug>-draft --expects reviews/<slug>/audit-1.md --thread $TH --notify-done
+"Audit complete. The lead is checking the verdict and will continue this report."`, body (fixed — add
 nothing about who asked or why):
 
 > Report audit. Audit `notes/<slug>/report.md` against `notes/<slug>/sources.md` and the
 > brief `notes/<slug>/brief.md`. Write `reviews/<slug>/audit-1.md`.
 
 Reply to the user: researching and drafting, then an independent audit; the thread will
-show progress.
+show progress and the lead will continue after the audit without another user message.
 
 ## Step 4 — Read the verdict
 

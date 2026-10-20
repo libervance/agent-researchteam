@@ -470,6 +470,7 @@ function Complete-ResearchWorker {
             if ($null -ne $result) {
                 $lines = @($result.Profiles | ForEach-Object { '{0} ({1}, 봇 @{2}): {3}' -f $_.DisplayName,$_.ProfileName,$_.BotUsername,$_.Status })
                 if ($result.PSObject.Properties['WorkspacePath']) { $lines += ('작업 폴더: ' + [string]$result.WorkspacePath) }
+                if ($result.PSObject.Properties['LocationsPath']) { $lines += ('저장 위치 안내: ' + [string]$result.LocationsPath) }
                 if ($result.PSObject.Properties['Notes']) { foreach ($note in @($result.Notes)) { if ($note) { Add-ResearchLog ([string]$note) } } }
                 $ui.TeamResult.Text = $lines -join [Environment]::NewLine
                 $ui.TeamResumeCheck.IsChecked = $true

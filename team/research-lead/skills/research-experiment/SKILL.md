@@ -71,10 +71,10 @@ TH=$("${PB[@]}" thread $P "Experiment x$K — C<n>: <claim, short>")
 > `experiments/x<K>/protocol.md` from the `exp-design` template. Smoke tests only; no
 > result-bearing runs.
 
-**Protocol check** — `--id x$K-check --assignee research-reviewer --skills protocol-review,lit-search
+**Protocol check** — `--id x$K-check --assignee research-reviewer --skills protocol-review,lit-search --gate human
 --after x$K-design --expects reviews/protocols/x$K.md --thread $TH --notify-done "Protocol
 x<K> is ready for your approval: experiments/x<K>/protocol.md, review in
-reviews/protocols/x<K>.md. Reply '@research-lead approve x<K>' or tell me what to change."`:
+reviews/protocols/x<K>.md. Tell research-lead whether you approve x<K> or want changes."`:
 
 > Protocol check, experiment **x<K>**. Load the `protocol-review` skill. Review
 > `experiments/x<K>/protocol.md`; write `reviews/protocols/x<K>.md`.

@@ -34,19 +34,24 @@ PB=("__PYTHON__" "__RESEARCH_BOARD__")   # a bash array: paths may contain space
 "${PB[@]}" show <paper> <id>       # the task and the agent's report
 "${PB[@]}" edit <paper> <id> --status ready        # retry a blocked/failed task
 "${PB[@]}" publish <paper> -m "<msg>" CLAUDE.md claims.md notes/   # push your own edits
-"${PB[@]}" init <folder>          # a new paper (or report folder) gets its board; the runners pick it up
+"${PB[@]}" project-create <name>  # scaffold, initialize, bind and register a new paper
+"${PB[@]}" init <folder>          # legacy/manual repository registration
 "${PB[@]}" deliver <paper> notes/x/report.md:docx --thread <id>   # attach a finished file, verified
 "${PB[@]}" ledger <paper>         # who produced what, at which commit (append-only record)
+"${PB[@]}" locations              # workspace, project folders, remotes and runtime paths
 ```
 
 Your workspace (terminal cwd) holds `_template/`, `reports/` and one folder per paper.
 Write task bodies and other scratch files in `.scratch/` there, as relative paths: the
 board is a native program and does not understand Git Bash paths like `/tmp/...`.
+`RESEARCH_PATHS.md` at the workspace root is the user's location guide. `project-create` refreshes it
+when you add a project. If asked where files are, run `locations`, give the guide's full
+path, and name the relevant project folder, board and remote. Do not include credential
+contents in a reply.
 
-Progress reporting is automatic: once a paper is bound to a Mattermost channel
-(`"${PB[@]}" setup <paper> --channel <team>/<channel> --mention @<user>`, once per paper), every
-runner posts claimed / still running / done / blocked / failed into the round's thread,
-from its own bot, and @mentions the user on blocks and on the chair's checkpoint. Open a
+Progress reporting is automatic: `project-create` binds a new paper to the installed home
+channel; `setup` remains available for existing papers. Each runner maintains one progress
+post per task in the round's thread and mentions the user only when action is needed. Open a
 thread per round with `"${PB[@]}" thread <paper> "<title>"` and pass its id as `--thread` to every
 task of that round.
 
@@ -66,8 +71,8 @@ pull`) — the files you care about were pushed by the other agents.
 - **`research-experiment`** — what to test next; design, approve, run and collect one
   experiment; act on an EVIDENCE-NEEDED item; approve a protocol or an amendment; check on
   a running experiment.
-- A standalone literature question → one `research-librarian` task (or the user asks that
-  device directly). A one-off LaTeX fix → one `research-writer` task.
+- A standalone literature question → one `research-librarian` task. A one-off LaTeX fix →
+  one `research-writer` task.
 
 ## Talking over Mattermost
 
@@ -82,8 +87,12 @@ The user usually reaches you as a bot in Mattermost. There:
   file names stay as the skills give them.
 - **Keep replies short** — a few lines the user can read on a phone. Files and full reports
   stay in the repo; link or name them rather than pasting them.
-- The other agents are bots in the same server, but you never give them work by message:
-  work goes on the board. They do not take instructions from you in chat.
+- The other agents' bot identities are for runner progress posts. They have no chat gateway
+  and cannot receive user or lead instructions over Mattermost. Give them work only on the board.
+- Your chat turn does not restart itself when a task finishes. The private lead coordinator
+  reads new ledger results and starts a separate lead turn against the board. Plan dependency
+  chains where possible. In coordinator turns, inspect current board state, use stable task
+  IDs, never send Mattermost messages or infer user approval, and stop at the human gates.
 
 ## Hard rules
 

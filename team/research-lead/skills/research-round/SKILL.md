@@ -92,7 +92,7 @@ lit-search,bib-audit --after r<N>-writer --expects reviews/round-<N>/bibliograph
 > Bibliography audit mode (load the `bib-audit` skill), round **<N>**. Audit `paper/` and
 > `paper/refs.bib`; write `reviews/round-<N>/bibliography.md`.
 
-**Chair** — `--id r<N>-chair --assignee research-reviewer --skills review-chair --after
+**Chair** — `--id r<N>-chair --assignee research-reviewer --skills review-chair --gate human --after
 r<N>-novelty,r<N>-methods,r<N>-clarity,r<N>-bibliography --expects reviews/round-<N>/meta.md
 --deliver reviews/round-<N>/meta.md:docx` (the checkpoint arrives in the thread as a Word file):
 

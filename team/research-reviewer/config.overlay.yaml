@@ -4,6 +4,7 @@
 terminal:
   cwd: "."              # the runner starts hermes inside a snapshot of the paper
 agent:
+  max_turns: 80
   # Blind by construction: no memory and no past-session search, so a referee cannot carry
   # an earlier round into this one, and a chair is always fresh. Also makes parallel runner
   # slots on this one profile safe.

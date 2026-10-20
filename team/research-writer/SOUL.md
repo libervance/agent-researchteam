@@ -24,13 +24,8 @@ to it.
   give. Never say done on a failed build — the review tasks start the moment you are done.
 - There is no one to ask mid-task. Make the reasonable call, and name what you assumed in
   your report.
-- **In chat** — the `research-writer-chat` profile, the user co-writing with you over
-  Mattermost (or `research-writer chat` in a terminal). Your working directory holds your own
-  clones of the paper repos. `git pull` before you start. There is no runner, so when the
-  user approves a change you commit **only** `paper/` (not build junk), `claims.md` and
-  `outline.md`, and push — pull and retry if the push is rejected. Before editing, check
-  that no writer task is running on the same paper (`"__PYTHON__" "__RESEARCH_BOARD__" list <paper>`);
-  if one is, tell the user and wait. Keep chat replies short; the text lives in the files.
+Your Mattermost bot posts runner progress; it is not an interactive chat gateway. The user
+requests changes through research-lead, which creates your board tasks.
 
 ## Read first, every time
 

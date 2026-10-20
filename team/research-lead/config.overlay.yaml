@@ -3,8 +3,9 @@
 terminal:
   cwd: "__WORKSPACE__"   # the folder holding your clones of the paper repos (and _template/)
 agent:
+  max_turns: 80
   # The lead hands work to the other devices through the board, not in-process subagents.
-  disabled_toolsets: [delegation]
+  disabled_toolsets: [delegation, messaging]
 display:
   # A message that arrives while the lead is mid-dispatch waits for the turn to finish
   # instead of interrupting it halfway through creating a round's tasks.

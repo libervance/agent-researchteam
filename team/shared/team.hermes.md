@@ -13,11 +13,15 @@ are in your `SOUL.md`.
 | `research-librarian` | Literature discovery and bibliography audit | `reviews/`, `notes/` |
 | `research-experimenter` | Experiment protocols, capped job runs, evidence and criterion checks, on the compute device | `experiments/`, `evidence/` |
 
-Each agent is also a bot on the team's Mattermost server. The user talks to `research-lead`
-(and optionally co-writes with `research-writer-chat` or asks `research-librarian-chat`). Work
-between agents never goes through chat — only through the paper repo's task board — and a
-bot never acts on another bot's message. The board's runners post progress to Mattermost
-on their own.
+Each agent has a bot identity on the team's Mattermost server. The user talks to
+`research-lead`; the other identities are used by board runners to post progress. Work
+between agents goes through the paper repo's task board, and a bot never acts on another
+bot's message.
+The lead also has a private coordinator process that reads completed board entries and
+starts a bounded lead turn; it does not route worker messages through Mattermost. It may
+plan the next authorized task but must stop for the user's contribution, outline, review
+and experiment-approval decisions. A capped worker attempt is `partial`: its allowed files
+and `.tasks/attempts/<id>/<n>.json` checkpoint stay in Git. Dependencies require `done`.
 
 Paths are relative to the paper folder: `paper/`, `claims.md`, `evidence/`, `reviews/`,
 `notes/`, `CLAUDE.md` (venue, notation, claims the project will not make — read it first),

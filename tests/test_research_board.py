@@ -32,7 +32,8 @@ with log.open("a", encoding="utf-8") as f:
     f.write(json.dumps({"cwd": os.getcwd(), "profile": args[args.index("-p") + 1],
                         "has_git": Path(".git").exists(), "has_tasks": Path(".tasks").exists(),
                         "token": os.environ.get("MATTERMOST_TOKEN"), "secret": os.environ.get("RESEARCH_GATEWAY_SECRET"),
-                        "len": len(prompt), "skills": [args[i + 1] for i, x in enumerate(args) if x == "-s"]}) + "\n")
+                        "len": len(prompt), "max_turns": args[args.index("--max-turns") + 1],
+                        "skills": [args[i + 1] for i, x in enumerate(args) if x == "-s"]}) + "\n")
 counter = Path(os.environ["STUB_LOG"] + ".count")
 n = int(counter.read_text()) + 1 if counter.exists() else 1
 counter.write_text(str(n))
@@ -51,6 +52,15 @@ if "REPORT" in prompt:
     Path("notes/report.md").write_text("# 보고서\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n", encoding="utf-8")
 if "TOUCH-PROTOCOL" in prompt:
     Path("experiments/x1/protocol.md").write_text("changed")
+if args[args.index("-p") + 1] == "research-lead" and "LEAD-CAPPED" in prompt:
+    print("lead made a partial plan")
+    print("maximum tool-iteration limit was reached")
+    sys.exit(0)
+if "CAPPED" in prompt and "LEAD-CAPPED" not in prompt and n == 1:
+    print("maximum tool-iteration limit was reached")
+    if "CAPPED-DONE" in prompt:
+        print("STATUS: done")
+    sys.exit(0)
 print("work done")
 print("STATUS: blocked — cannot" if "BLOCK" in prompt else "STATUS: done")
 '''
@@ -86,6 +96,15 @@ class MockMattermost(http.server.BaseHTTPRequestHandler):
             data = self.files[fid]
             self.send_response(200); self.send_header("Content-Length", str(len(data))); self.end_headers()
             self.wfile.write(data); return
+        self._json({}, 404)
+
+    def do_PUT(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        pid = self.path.rsplit("/", 1)[-1]
+        for post in MockMattermost.posts:
+            if post["id"] == pid:
+                post["message"] = body["message"]
+                return self._json(post)
         self._json({}, 404)
 
 
@@ -155,8 +174,126 @@ class Base(unittest.TestCase):
 
 
 class BoardTests(Base):
+    def test_coordinator_selects_workflow_skill_from_task_id(self):
+        board = _load_board()
+        self.assertTrue(board.ITERATION_LIMIT.search("Reached maximum iterations (40) — response may be incomplete"))
+        self.assertEqual("research-report", board.lead_skill_for("rep-foo-audit-1"))
+        self.assertEqual("research-start", board.lead_skill_for("s3-outline"))
+        self.assertEqual("research-experiment", board.lead_skill_for("x2-check"))
+        self.assertEqual("research-round", board.lead_skill_for("r3-chair"))
+        self.assertIsNone(board.lead_skill_for("custom-task"))
+        self.assertNotEqual(board.clone_path(self.home / "work", "https://one.example/p.git"),
+                            board.clone_path(self.home / "work", "https://two.example/p.git"))
+
+    def test_project_create_is_idempotent_and_registers_local_remote(self):
+        (self.ws / "_template").mkdir()
+        shutil.copytree(ROOT / "team" / "template", self.ws / "_template", dirs_exist_ok=True)
+        self.home.mkdir(exist_ok=True)
+        (self.home / "workspace-root.txt").write_text(str(self.ws) + "\n", encoding="utf-8")
+        (self.home / "team.json").write_text(json.dumps({"HomeChannelID": "c" * 26,
+            "WizardOptions": {"HumanUsername": "me"}}), encoding="utf-8")
+        self.board("project-create", "p2")
+        self.board("project-create", "p2")
+        self.assertTrue((self.ws / "p2/.tasks/project.json").is_file())
+        self.assertTrue((self.ws / "p2/.tasks/board.conf").is_file())
+        self.assertEqual(1, (self.home / "papers").read_text(encoding="utf-8").splitlines().count(
+            str(self.home / "boards/p2.git")))
+        self.assertIn(str(self.ws / "p2"), (self.ws / "RESEARCH_PATHS.md").read_text(encoding="utf-8"))
+
+    def test_coordinator_consumes_result_once_without_mattermost_handoff(self):
+        shutil.copytree(ROOT / "team" / "template", self.ws / "_template")
+        self.home.mkdir(exist_ok=True)
+        (self.home / "workspace-root.txt").write_text(str(self.ws) + "\n", encoding="utf-8")
+        (self.home / "team.json").write_text(json.dumps({"HomeChannelID": "c" * 26,
+            "WizardOptions": {"HumanUsername": "me"}}), encoding="utf-8")
+        self.board("project-create", "p2")
+        self.paper = self.ws / "p2"
+        self.task("w1", "research-writer", "WRITE-PAPER", "--expects", "paper/main.tex")
+        self.run_role("research-writer")
+        before = len(MockMattermost.posts)
+        self.board("coordinate", "--once", "--hermes", str(self.hermes))
+        self.board("coordinate", "--once", "--hermes", str(self.hermes))
+        self.assertEqual(1, len([call for call in self.calls() if call["profile"] == "research-lead"]))
+        self.assertEqual(before, len(MockMattermost.posts))
+
+    def test_human_gate_notifies_user_without_background_lead_turn(self):
+        shutil.copytree(ROOT / "team" / "template", self.ws / "_template")
+        self.home.mkdir(exist_ok=True)
+        (self.home / "workspace-root.txt").write_text(str(self.ws) + "\n", encoding="utf-8")
+        (self.home / "team.json").write_text(json.dumps({"HomeChannelID": "c" * 26,
+            "WizardOptions": {"HumanUsername": "me"}}), encoding="utf-8")
+        self.board("project-create", "p2")
+        self.paper = self.ws / "p2"
+        self.task("w1", "research-writer", "WRITE-PAPER", "--expects", "paper/main.tex", "--gate", "human")
+        self.run_role("research-writer")
+        self.board("coordinate", "--once", "--hermes", str(self.hermes))
+        self.assertFalse(any(call["profile"] == "research-lead" for call in self.calls()))
+        self.assertTrue(any("ready for your decision" in post["message"] and "@me" in post["message"]
+                            for post in MockMattermost.posts))
+
+    def test_capped_lead_turn_saves_checkpoint_and_requests_human_resume(self):
+        shutil.copytree(ROOT / "team" / "template", self.ws / "_template")
+        self.home.mkdir(exist_ok=True)
+        (self.home / "workspace-root.txt").write_text(str(self.ws) + "\n", encoding="utf-8")
+        (self.home / "team.json").write_text(json.dumps({"HomeChannelID": "c" * 26,
+            "WizardOptions": {"HumanUsername": "me"}}), encoding="utf-8")
+        self.board("project-create", "p2")
+        self.paper = self.ws / "p2"
+        self.task("LEAD-CAPPED", "research-writer", "WRITE-PAPER", "--expects", "paper/main.tex")
+        self.run_role("research-writer")
+        self.board("coordinate", "--once", "--hermes", str(self.hermes))
+        self.board("coordinate", "--once", "--hermes", str(self.hermes))
+        self.assertEqual(1, len([call for call in self.calls() if call["profile"] == "research-lead"]))
+        checkpoints = list((self.home / "run" / "lead-attempts").glob("*.json"))
+        self.assertEqual(1, len(checkpoints))
+        self.assertIn("lead made a partial plan", checkpoints[0].read_text(encoding="utf-8"))
+        self.assertTrue(any("Background lead work" in post["message"] and "@me" in post["message"]
+                            for post in MockMattermost.posts))
+
+    def test_init_pushes_a_preconfigured_empty_remote_and_sets_tracking(self):
+        remote = self.tmp / "shared.git"
+        git("init", "--bare", "-q", "-b", "main", str(remote))
+        other = self.ws / "external"; other.mkdir()
+        (other / "CLAUDE.md").write_text("# external\n", encoding="utf-8")
+        git("init", "-q", "-b", "main", cwd=other)
+        git("remote", "add", "origin", str(remote), cwd=other)
+        self.board("init", str(other))
+        self.assertEqual("origin/main", git("rev-parse", "--abbrev-ref", "@{u}", cwd=other))
+        self.assertEqual("# external", git("show", "main:CLAUDE.md", cwd=remote))
+        self.assertIn(str(remote), (self.home / "papers").read_text(encoding="utf-8").splitlines())
+
+    def test_locations_guide_tracks_new_projects_and_hides_remote_credentials(self):
+        self.home.mkdir(exist_ok=True)
+        (self.home / "workspace-root.txt").write_text(str(self.ws) + "\n", encoding="utf-8")
+        (self.home / "team.json").write_text(json.dumps({"HermesHome": str(self.hh),
+            "InstallDir": str(self.tmp / "hermes-source")}), encoding="utf-8")
+        second = self.ws / "p2"; second.mkdir()
+        (second / "CLAUDE.md").write_text("# p2\n", encoding="utf-8")
+        self.board("init", str(second))
+        guide = self.ws / "RESEARCH_PATHS.md"
+        content = guide.read_text(encoding="utf-8")
+        self.assertIn(str(second), content)
+        self.assertIn(str(self.home / "boards" / "p2.git"), content)
+        self.assertIn(str(self.home / "service-status.json"), content)
+        self.assertIn(str(self.hh / "profiles"), content)
+        self.assertIn("not a GitHub repository", content)
+        self.assertIn(str(self.paper), self.board("locations").stdout)
+        self.assertEqual("https://github.com/org/p2.git",
+                         self._public_remote_for_test("https://secret@github.com/org/p2.git"))
+
+    @staticmethod
+    def _load_board_spec():
+        return importlib.util.spec_from_file_location("research_board", BOARD)
+
+    @classmethod
+    def _public_remote_for_test(cls, url):
+        spec = cls._load_board_spec()
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module._public_remote(url)
+
     def test_init_registers_paper_and_runner_reads_papers_file(self):
-        papers = (self.home / "papers").read_text(encoding="utf-8").split()
+        papers = (self.home / "papers").read_text(encoding="utf-8").splitlines()
         self.assertEqual([str(self.home / "boards" / "p1.git")], papers)
         self.task("w1", "research-writer", "WRITE-PAPER", "--expects", "paper/main.tex")
         self.run_role("research-writer")  # no URLs given: <team home>/papers
@@ -178,6 +315,31 @@ class BoardTests(Base):
                          ledger[0]["outputs"]["paper/main.tex"])
         self.assertIn("at commit", self.state("w1"))
         self.assertIn("ledger intact: 1", self.board("ledger", str(self.paper), "--verify").stdout)
+
+    def test_capped_task_preserves_partial_work_then_resumes_once(self):
+        self.task("w1", "research-writer", "CAPPED-DONE WRITE-PAPER", "--expects", "paper/main.tex")
+        self.run_role("research-writer")
+        self.assertIn("status: done", self.state("w1"))
+        self.assertEqual(2, len(self.calls()))
+        self.assertTrue(all(call["max_turns"] == "80" for call in self.calls()))
+        attempts = sorted((self.paper / ".tasks/attempts/w1").glob("*.json"))
+        self.assertEqual(["1.json", "2.json"], [p.name for p in attempts])
+        self.assertEqual("partial", json.loads(attempts[0].read_text(encoding="utf-8"))["status"])
+        ledger = [json.loads(l) for l in (self.paper / ".tasks/ledger.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(["partial", "done"], [entry["status"] for entry in ledger])
+
+    def test_experimenter_cap_stays_partial_for_lead_review(self):
+        self.task("e1", "research-experimenter", "CAPPED")
+        self.run_role("research-experimenter")
+        self.assertIn("status: partial", self.state("e1"))
+        self.assertEqual(1, len(self.calls()))
+
+    def test_bot_notice_does_not_mention_another_bot(self):
+        self.task("w1", "research-writer", "WRITE-PAPER", "--notify-done", "Tell @research-lead to continue")
+        self.run_role("research-writer")
+        messages = [p["message"] for p in MockMattermost.posts]
+        self.assertFalse(any("@research-lead" in message for message in messages))
+        self.assertTrue(any("@me" in message for message in messages))
 
     def test_ledger_rewrite_is_detected_and_reported(self):
         for tid in ("w1", "w2"):
@@ -206,7 +368,9 @@ class BoardTests(Base):
         self.assertNotEqual("reviewer edit", (self.paper / "paper/main.tex").read_text(encoding="utf-8"))
         base = [l for l in self.state("r1").splitlines() if l.startswith("base:")][0].split()[1]
         ck = [p for p in MockMattermost.posts if "round checkpoint" in p["message"]]
-        self.assertTrue(ck and base[:12] in ck[0]["message"] and "@me" in ck[0]["message"])
+        self.assertTrue(ck and base[:12] in ck[0]["message"])
+        self.assertTrue(any("Read `reviews/round-1/meta.md`" in p["message"] and "@me" in p["message"]
+                            for p in MockMattermost.posts))
 
     def test_drifted_profile_blocks_task(self):
         soul = self.hh / "profiles/research-writer/SOUL.md"; soul.write_text("original", encoding="utf-8")
@@ -236,7 +400,10 @@ class BoardTests(Base):
         self.assertEqual("plan", (d / "protocol.md").read_text(encoding="utf-8"))
 
     def test_long_prompt_passed_as_file_and_role_skills_preloaded(self):
-        self.task("w1", "research-writer", "WRITE-PAPER " + "x" * 40000, "--skills", "presubmission")
+        prompt = self.ws / "long-prompt.md"
+        prompt.write_text("WRITE-PAPER " + "x" * 40000, encoding="utf-8")
+        self.board("new", str(self.paper), "--id", "w1", "--assignee", "research-writer",
+                   "--body-file", str(prompt), "--skills", "presubmission")
         self.run_role("research-writer")
         self.assertIn("status: done", self.state("w1"))
         self.assertGreater(self.calls()[0]["len"], 40000)

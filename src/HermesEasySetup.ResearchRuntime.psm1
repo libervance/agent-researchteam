@@ -415,6 +415,7 @@ function Invoke-HermesResearchTeamSetup {
         $mention = '@' + $options.HumanUsername
         $boardEnv = @{} + $environment
         $boardEnv['MATTERMOST_URL'] = $summary.ServerURL; $boardEnv['MATTERMOST_TOKEN'] = $tokens['research-lead']
+        Write-HermesResearchAtomicText -LiteralPath (Join-Path $root 'workspace-root.txt') -Text ($options.WorkspacePath + "`n")
         $null = Install-HermesResearchWorkspace -WorkspacePath $options.WorkspacePath -TeamRoot $teamRoot -Python $python -Environment $boardEnv -ChannelID $summary.HomeChannelID -Mention $mention
 
         $secrets = [ordered]@{ MATTERMOST_URL = $summary.ServerURL }
@@ -432,6 +433,7 @@ function Invoke-HermesResearchTeamSetup {
             team_home = $root; hermes_home = $paths.HermesHome; python = $python; hermes = $command
             board = (Join-Path $teamRoot 'shared\research_board.py'); papers_file = (Join-Path $root 'papers')
             secrets_file = $secretsPath; runners = $runners.ToArray()
+            coordinator = [ordered]@{ enabled = $true; task_timeout = 1200 }
             gateway = $(if ($gateway) { [ordered]@{ dir = $gateway.Dir; port = $gateway.Port; litellm = $gateway.Litellm } } else { $null })
         }
         Write-HermesResearchAtomicText -LiteralPath $serviceConfig -Text (($service | ConvertTo-Json -Depth 6) + "`n")
@@ -444,13 +446,16 @@ function Invoke-HermesResearchTeamSetup {
             Tasks = @($servicePlan.TaskName, $leadPlan.TaskName); Profiles = $records.ToArray(); UpdatedAt = (Get-Date).ToUniversalTime().ToString('o')
         }
         Write-HermesResearchAtomicText -LiteralPath $statePath -Text (($state | ConvertTo-Json -Depth 8) + "`n")
+        $locationsPath = Join-Path $options.WorkspacePath 'RESEARCH_PATHS.md'
+        $locations = Invoke-HermesProcess -FilePath $python -ArgumentList @('-B', (Join-Path $teamRoot 'shared\research_board.py'), 'locations', '--workspace', $options.WorkspacePath, '--write') -WorkingDirectory $options.WorkspacePath -Environment $boardEnv -TimeoutSeconds 120
+        if (-not $locations.Started -or $locations.TimedOut -or $locations.ExitCode -ne 0) { throw 'ResearchLocationsGuideFailed' }
 
         Publish-HermesResearchStage $ProgressCallback 'research-service' '연구팀 서비스(모델 라우터·실행기)와 총괄 채팅을 로그인 자동 실행으로 등록하고 시작합니다.' 72
         Register-HermesResearchServiceTask -Plan $servicePlan -Python $python -ServiceScript $serviceScript -ConfigPath $serviceConfig -HermesHome $paths.HermesHome -HasOwnership ($null -ne $prior -and $prior.Kind -ceq 'Team')
         Register-HermesResearchGatewayTask -Plan $leadPlan -CommandPath $command -HermesHome $paths.HermesHome -InstallDir $paths.InstallDir -ProfileName 'research-lead' -HasOwnership ($null -ne $prior -and $prior.Kind -ceq 'Team')
         $startedAt = Get-Date
         Start-HermesResearchGatewayTask -Plan $servicePlan
-        $null = Wait-HermesResearchServiceReady -ResearchRoot $root -StartedAfter $startedAt -ExpectedChildren ($runners.Count + $(if ($gateway) { 1 } else { 0 })) -Gateway ($null -ne $gateway)
+        $null = Wait-HermesResearchServiceReady -ResearchRoot $root -StartedAfter $startedAt -ExpectedChildren ($runners.Count + 1 + $(if ($gateway) { 1 } else { 0 })) -Gateway ($null -ne $gateway)
         Start-HermesResearchGatewayTask -Plan $leadPlan
         Wait-HermesResearchGatewayReady -CommandPath $command -ProfileName 'research-lead' -Environment $environment -Plan $leadPlan -TimeoutSeconds 90
 
@@ -464,7 +469,7 @@ function Invoke-HermesResearchTeamSetup {
             Succeeded = [bool]$workflowTest.Passed; PartialSuccess = -not $workflowTest.Passed; ExecutionReady = [bool]$workflowTest.Passed; WorkflowTest = $workflowTest
             ExecutionMode = 'ResearchTeam'; PendingSettings = $pending; Profiles = $records.ToArray(); StatePath = $statePath; MigrationBackupPath = $migrationBackup
             RuntimeKind = $state.RuntimeKind; ServerURL = $summary.ServerURL; HomeChannelID = $summary.HomeChannelID; Model = $summary.Model
-            LeadUsername = $leadName; WorkspacePath = $options.WorkspacePath; TaskNames = $state.Tasks; Notes = @($notes)
+            LeadUsername = $leadName; WorkspacePath = $options.WorkspacePath; LocationsPath = $locationsPath; TaskNames = $state.Tasks; Notes = @($notes)
         }
     } finally { if ($null -ne $lock) { $lock.Dispose() } }
 }

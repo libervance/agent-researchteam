@@ -2,5 +2,6 @@
 terminal:
   cwd: "."              # the runner starts hermes inside a snapshot of the paper
 agent:
+  max_turns: 80
   # The bibliography audit is part of the blind round; no memory across papers or rounds.
   disabled_toolsets: [memory, session_search, delegation, cronjob, messaging]

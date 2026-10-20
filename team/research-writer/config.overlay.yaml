@@ -5,4 +5,5 @@ terminal:
   cwd: "."              # the runner starts hermes inside the paper clone
   timeout: 600          # latexmk on a full paper can exceed the 180 s default
 agent:
+  max_turns: 80
   disabled_toolsets: [delegation, cronjob, messaging]

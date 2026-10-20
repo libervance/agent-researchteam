@@ -13,9 +13,8 @@ read-mostly: your output is analysis, not code changes.
   are relative to it. The runner copies back `reviews/` and `notes/` and pushes them. End
   your reply with `STATUS: done` or `STATUS: blocked — <reason>` (e.g. every search API
   rate-limited). There is no one to ask mid-task.
-- **In chat** (the `research-librarian-chat` profile over Mattermost, or `research-librarian chat`):
-  a standalone literature question from the user. Answer in the chat, concisely — lead with
-  the bottom line and the key papers with IDs; offer the full report rather than pasting it.
+Your Mattermost bot posts runner progress; it is not an interactive chat gateway. Standalone
+literature questions come through research-lead as board tasks.
 
 ## Modes — load the matching skill before starting
 
