@@ -74,10 +74,9 @@
             <StackPanel><TextBlock Text="로컬 Mattermost 주소"/><TextBox x:Name="TeamServerURL" Text="http://127.0.0.1:18065" IsReadOnly="True" Margin="0,5,0,0"/></StackPanel>
             <StackPanel Grid.Column="2"><TextBlock Text="연구 채널 ID"/><TextBox x:Name="HomeChannelID" IsReadOnly="True" Margin="0,5,0,0"/></StackPanel>
           </Grid>
-          <TextBlock Text="관리자 비밀번호를 입력하고 다음 항목으로 이동하거나 Enter를 누르면 토큰이 없는 봇을 백그라운드에서 순서대로 발급합니다. 새 봇은 먼저 팀 계정과 토큰만 준비하며, 채널 참여는 작업 설정·필수 동의 후 연구팀 설치를 누를 때 진행합니다. 기존 토큰은 유지됩니다." TextWrapping="Wrap" Margin="0,0,0,10"/>
-          <DockPanel Margin="0,0,0,12"><TextBlock Text="봇 발급·채널 참여용 관리자 비밀번호" VerticalAlignment="Center" Margin="0,0,12,0"/><PasswordBox x:Name="TeamAdminPassword" Width="260" HorizontalAlignment="Left" AutomationProperties.Name="봇 발급·채널 참여용 관리자 비밀번호"/></DockPanel>
+          <TextBlock Text="봇의 표시 이름만 입력하세요. 작업 설정과 필수 동의를 마친 뒤 연구팀 설치·업데이트를 누르면 토큰 준비와 채널 연결을 백그라운드에서 자동 처리합니다. 기존 봇과 토큰은 재사용합니다. 실패 시 안내된 원인을 해결하고 같은 설치·업데이트 버튼을 다시 누르세요." TextWrapping="Wrap" Margin="0,0,0,10"/>
+          <DockPanel Margin="0,0,0,12"><TextBlock Text="자동 봇 연결용 관리자 비밀번호 (새 봇 준비 시 필요)" VerticalAlignment="Center" Margin="0,0,12,0"/><PasswordBox x:Name="TeamAdminPassword" Width="260" HorizontalAlignment="Left" AutomationProperties.Name="자동 봇 연결용 관리자 비밀번호 (새 봇 준비 시 필요)"/></DockPanel>
           <Grid x:Name="AgentRows" AutomationProperties.Name="연구 에이전트 다섯 개 설정"/>
-          <Button x:Name="IssueAllBotsButton" Content="누락된 봇 토큰 발급 재시도" HorizontalAlignment="Left" Margin="0,2,0,0"/>
           <Separator Margin="0,10,0,12"/>
           <TextBlock Text="모델 연결" FontSize="19" FontWeight="SemiBold"/>
           <RadioButton x:Name="ModelModeGateway" GroupName="ModelMode" IsChecked="True" Margin="0,8,0,4"><TextBlock Text="모델 라우터 (권장) — API 키로 역할별 모델을 고르고, 논문의 공개 등급(public / private / air-gapped)에 따라 클라우드와 로컬 모델을 나눕니다. 로컬 모델이 없으면 비공개 논문은 실행하지 않고 이유를 알립니다." TextWrapping="Wrap"/></RadioButton>
@@ -103,13 +102,15 @@
             <StackPanel Grid.Row="1" Grid.Column="2"><TextBlock Text="논문 심사 병렬 처리 수 (1~3)"/><ComboBox x:Name="ReviewerSlots" MinHeight="32" Margin="0,5,0,0" AutomationProperties.Name="논문 심사 병렬 처리 수"/><TextBlock Text="research-reviewer 봇은 1개입니다. 논문 심사 라운드에서 새로움·방법·명료성 심사 3건을 만들 때 1=순차, 2=최대 2건, 3=3건 동시 실행합니다. 평소에는 심사 작업이 없으면 모델을 호출하지 않습니다." TextWrapping="Wrap" Foreground="#56657D" FontSize="12" Margin="0,4,0,0"/></StackPanel>
           </Grid>
           <TextBlock Text="작업 하나가 시간 한도를 넘으면 중단하고 스레드에 알립니다. 일시적인 모델 오류는 자동으로 다시 시도합니다. 원고 PDF를 만들려면 이 PC에 TeX(MiKTeX 또는 TeX Live)가 있어야 합니다. 없으면 집필 작업이 이유와 함께 보류됩니다." TextWrapping="Wrap" Foreground="#56657D" Margin="0,8,0,10"/>
-          <CheckBox x:Name="ModelEgressConsent" Margin="0,0,0,8"><TextBlock Text="선택한 모델 제공자(또는 로컬 모델)에 작업·논문 내용을 보내는 데 동의합니다. 설치 테스트와 실제 작업은 모델 사용량을 소모합니다." TextWrapping="Wrap"/></CheckBox>
-          <CheckBox x:Name="PublicWebConsent" Margin="0,0,0,10"><TextBlock Text="문헌 조사·인용 검증에 필요한 공개 웹 검색과 원문 읽기(arXiv·Semantic Scholar·DOI 등)를 허용합니다. 비공개 논문의 내용은 검색어로 보내지 않습니다." TextWrapping="Wrap"/></CheckBox>
-          <CheckBox x:Name="TeamResumeCheck" Content="이 마법사에서 만든 연구팀 갱신·재설정 (구성이 다르면 자동 백업, 기록·메모리·세션 유지)" Margin="0,6,0,6"/>
+          <TextBlock Text="필수 동의" FontSize="16" FontWeight="SemiBold" Margin="0,4,0,8"/>
+          <CheckBox x:Name="AllTeamConsents" Content="필수 항목 전체 동의 (아래 3개; 기존 팀·베타 옵션 제외)" Margin="0,0,0,12"/>
+          <CheckBox x:Name="ModelEgressConsent" Margin="0,0,0,8"><TextBlock Text="[필수] 선택한 모델 제공자(또는 로컬 모델)에 작업·논문 내용을 보내는 데 동의합니다. 설치 테스트와 실제 작업은 모델 사용량을 소모합니다." TextWrapping="Wrap"/></CheckBox>
+          <CheckBox x:Name="PublicWebConsent" Margin="0,0,0,10"><TextBlock Text="[필수] 문헌 조사·인용 검증에 필요한 공개 웹 검색과 원문 읽기(arXiv·Semantic Scholar·DOI 등)를 허용합니다. 비공개 논문의 내용은 검색어로 보내지 않습니다." TextWrapping="Wrap"/></CheckBox>
+          <CheckBox x:Name="TeamConsent" Margin="0,0,0,12"><TextBlock Text="[필수] 위 설정으로 다섯 프로필과 자동 실행 서비스를 구성하고, 실제 모델·봇으로 각 역할이 작은 작업을 하는 설치 테스트를 연구 채널에 게시하는 데 동의합니다. 다섯 역할의 결과·전달·기록 확인 전에는 사용 준비 완료로 표시하지 않습니다." TextWrapping="Wrap"/></CheckBox>
+          <TextBlock Text="기존 팀 관련 옵션" FontSize="16" FontWeight="SemiBold" Margin="0,12,0,8"/>
+          <CheckBox x:Name="TeamResumeCheck" Margin="0,6,0,6"><TextBlock Text="[기존 팀 갱신 시 필수 · 신규 설치 시 제외] 이 마법사에서 만든 연구팀 갱신·재설정 (구성이 다르면 자동 백업, 기록·메모리·세션 유지)" TextWrapping="Wrap"/></CheckBox>
           <TextBlock x:Name="TeamUpdateStatus" Text="기존 팀을 불러오면 설치된 구성과 이 설치기의 구성을 비교합니다. 새 설치기를 여는 것만으로 실행 중인 팀은 변경되지 않습니다." TextWrapping="Wrap" Foreground="#56657D" Margin="0,0,0,10" AutomationProperties.LiveSetting="Polite"/>
-          <CheckBox x:Name="MigrationConsent" Margin="0,0,0,10"><TextBlock Text="베타 실험 전용 (일반 갱신에는 선택하지 않음): 이전 4역할 분배 서비스 또는 오래된 5역할 팀을 일반 재설정 절차 없이 교체합니다. 먼저 설정을 백업하고, 대화·산출물·기록은 유지합니다." TextWrapping="Wrap"/></CheckBox>
-          <CheckBox x:Name="TeamConsent" Margin="0,0,0,12"><TextBlock Text="위 설정으로 다섯 프로필과 자동 실행 서비스를 구성하고, 실제 모델·봇으로 각 역할이 작은 작업을 하는 설치 테스트를 연구 채널에 게시하는 데 동의합니다. 다섯 역할의 결과·전달·기록 확인 전에는 사용 준비 완료로 표시하지 않습니다." TextWrapping="Wrap"/></CheckBox>
-          <CheckBox x:Name="AllTeamConsents" Content="필수 항목 전체 동의 (모델 전송·공개 웹 검색·설치 테스트; 베타 교체 제외)" Margin="0,0,0,12"/>
+          <CheckBox x:Name="MigrationConsent" Margin="0,0,0,10"><TextBlock Text="[선택] 베타 실험 전용 (일반 갱신에는 선택하지 않음): 이전 4역할 분배 서비스 또는 오래된 5역할 팀을 일반 재설정 절차 없이 교체합니다. 먼저 설정을 백업하고, 대화·산출물·기록은 유지합니다." TextWrapping="Wrap"/></CheckBox>
           <WrapPanel><Button x:Name="TeamApplyButton" Content="연구팀 설치·실제 작업 테스트" IsEnabled="False"/><Button x:Name="TeamOpenButton" Content="연구 채널 열기" IsEnabled="False"/></WrapPanel>
           <TextBox x:Name="TeamResult" Height="95" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Margin="0,12,0,0" AutomationProperties.Name="연구팀 구성 결과"/>
           <TextBlock Text="사용 준비 완료 후 연구 채널에서 총괄 봇을 멘션하세요. ‘@research-lead ○○에 대한 보고서 작성해줘’ → 조사·감사를 거친 보고서를 Word 파일로 첨부, ‘@research-lead ○○ 주제로 논문을 시작하자’ → 범위·주장·개요 확인 후 집필, ‘@research-lead 심사 라운드 돌려줘’ → 블라인드 심사 3건과 인용 검증 후 종합 판정. 진행 상황은 각 담당 봇이 같은 스레드에 올립니다." TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#56657D"/>
