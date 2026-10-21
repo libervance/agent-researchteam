@@ -101,15 +101,25 @@ sys.addaudithook(readonly_audit)
 sys.path.insert(0, os.path.join(os.getcwd(), "venv", "Lib", "site-packages"))
 sys.path.insert(0, os.getcwd())
 with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-    from hermes_cli.auth import resolve_codex_runtime_credentials, AuthError
     from hermes_cli.codex_models import get_codex_model_ids
+    auth_path = os.path.join(os.environ["HERMES_HOME"], "auth.json")
     try:
-        credentials = resolve_codex_runtime_credentials(read_only=True)
-    except AuthError as exc:
-        if getattr(exc, "code", None) != "codex_auth_missing":
-            raise
-        credentials = {}
-    found = bool(credentials.get("api_key"))
+        with open(auth_path, encoding="utf-8-sig") as auth_file:
+            auth = json.load(auth_file)
+    except FileNotFoundError:
+        auth = {}
+    if not isinstance(auth, dict):
+        raise ValueError("Invalid Hermes auth store")
+    providers = auth.get("providers", {})
+    provider = providers.get("openai-codex", {}) if isinstance(providers, dict) else {}
+    tokens = provider.get("tokens", {}) if isinstance(provider, dict) else {}
+    singleton_token = tokens.get("access_token") if isinstance(tokens, dict) else None
+    pool = auth.get("credential_pool", {})
+    entries = pool.get("openai-codex", []) if isinstance(pool, dict) else []
+    pool_tokens = (entry.get("access_token") or entry.get("runtime_api_key")
+                   for entry in entries if isinstance(entry, dict)) if isinstance(entries, list) else ()
+    found = bool(isinstance(singleton_token, str) and singleton_token.strip()) or any(
+        isinstance(token, str) and bool(token.strip()) for token in pool_tokens)
     models = get_codex_model_ids()
     preferred = ""
     try:
