@@ -1,7 +1,8 @@
 # Merged into ~/.hermes/profiles/research-lead/config.yaml by install.sh.
 # Model/provider: the gateway overlay, or (without it) copied from the default profile at creation.
 terminal:
-  cwd: "__WORKSPACE__"   # the folder holding your clones of the paper repos (and _template/)
+  timeout: 600
+  cwd: "."   # the folder holding your clones of the paper repos (and _template/)
 agent:
   max_turns: 80
   # The lead hands work to the other devices through the board, not in-process subagents.

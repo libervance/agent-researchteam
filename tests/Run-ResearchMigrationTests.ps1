@@ -210,11 +210,11 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.Loader.psm1') -Force
         $testRoot = Join-Path $script:fixtureRoot 'live-fixture'
         New-Item -ItemType Directory -Path $testRoot | Out-Null
         $selfTest = { Invoke-HermesResearchSelfTest -ResearchRoot $testRoot -Python 'fixture.exe' -Environment @{} -WorkspacePath $testRoot -ChannelID ('c'*26) -CommandPath 'hermes.exe' -Mention '@fixture' }
-        $valid = [ordered]@{passed=$true;live=$true;folder='C:\ws\_selftest-20261016';ledger_intact=$true;delivered=$true;lead='done';error=$null
-            roles=[ordered]@{'research-librarian'='done';'research-reviewer'='done';'research-writer'='done';'research-experimenter'='done'}}
+        $valid = [ordered]@{passed=$true;live=$true;folder='C:\ws\_selftest-20261016';ledger_intact=$true;dashboard_ready=$true;delivered=$true;lead='done';error=$null
+            roles=[ordered]@{'research-librarian'='done';'research-reviewer'='done';'research-lead'='done';'research-experimenter'='done'}}
         $script:processResult.StdOut = $valid | ConvertTo-Json -Compress -Depth 4
         $result = & $selfTest
-        Assert-Migration ($result.Passed -and $result.Live -and $result.AuditPassed -and @($result.Roles).Count -eq 5 -and $result.RequestID -ceq '_selftest-20261016') 'Live test passes only with five roles done, delivery and an intact ledger'
+        Assert-Migration ($result.Passed -and $result.Live -and $result.AuditPassed -and @($result.Roles).Count -eq 4 -and $result.RequestID -ceq '_selftest-20261016') 'Live test passes only with four roles done, delivery and an intact ledger'
         Assert-Migration ((Test-Path -LiteralPath (Join-Path $testRoot 'live-test.json')) -and ([IO.File]::ReadAllText((Join-Path $testRoot 'live-test.json')) | ConvertFrom-Json).passed -eq $true) 'Live test evidence is kept with the team record'
         foreach ($case in @(
             @{ Name = 'a simulated (not live) run'; Change = { $valid.live = $false } },

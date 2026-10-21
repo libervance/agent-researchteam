@@ -6,7 +6,7 @@
 Makes a small folder `_selftest-<time>` in the workspace, gives it a board, and puts one
 small real task on it for each runner role, through the running team service and the real
 models and bots: the librarian finds one real paper, the reviewer checks that citation
-(blind), the writer and the experimenter each write one file. When they are done, the
+(blind), the lead (authorship) and the experimenter each write one file. When they are done, the
 lead answers one question about the board through its own profile and skills, the
 reviewer's note is delivered to the thread and verified, and the ledger chain is checked.
 Prints one JSON object; exit 0 only if every check passed.
@@ -21,6 +21,8 @@ import os
 import subprocess as sp
 import sys
 import time
+import urllib.request
+import urllib.parse
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -30,7 +32,7 @@ BOARD = HERE / "research_board.py"
 _board_spec = importlib.util.spec_from_file_location("_hermes_selftest_board", BOARD)
 rb = importlib.util.module_from_spec(_board_spec)
 _board_spec.loader.exec_module(rb)
-RUNNER_ROLES = ["research-librarian", "research-reviewer", "research-writer", "research-experimenter"]
+RUNNER_ROLES = ["research-librarian", "research-reviewer", "research-lead", "research-experimenter"]
 
 CLAUDE = """# Installation check
 
@@ -48,7 +50,7 @@ TASKS = [
      "Installation check (keep it short). Open the arXiv page of the paper in "
      "`notes/selftest/sources.md` and check that the title and year match. Write "
      "`reviews/selftest/check.md` with `Verdict: pass` if they match, else `Verdict: revise` and why."),
-    ("t-writer", "research-writer", "paper/sections/selftest.tex", "", "",
+    ("t-author", "research-lead", "paper/sections/selftest.tex", "", "",
      "Installation check (keep it short; no build needed). Write `paper/sections/selftest.tex` "
      "containing one LaTeX sentence that says this team was installed successfully."),
     ("t-experimenter", "research-experimenter", "evidence/selftest/env.json", "", "",
@@ -111,7 +113,7 @@ def main():
     ws = Path(a.workspace)
     folder = ws / time.strftime("_selftest-%Y%m%d-%H%M%S")
     result = {"passed": False, "live": True, "folder": str(folder), "roles": {}, "lead": None,
-              "delivered": False, "ledger_intact": False, "thread": None, "error": None}
+              "delivered": False, "ledger_intact": False, "dashboard_ready": False, "thread": None, "error": None}
     try:
         for d in ("notes", "reviews", "paper/sections", "evidence"):
             (folder / d).mkdir(parents=True, exist_ok=True)
@@ -119,10 +121,10 @@ def main():
         (folder / "CLAUDE.md").write_text(CLAUDE, encoding="utf-8", newline="\n")
         board("init", str(folder), cwd=ws)
         board("setup", str(folder), "--channel", a.channel, *(["--mention", a.mention] if a.mention else []), cwd=ws)
-        thread = board("thread", str(folder), "설치 확인 — 다섯 역할 실제 작업 테스트 / installation check", cwd=ws).stdout.split()[0]
+        thread = board("thread", str(folder), "설치 확인 — 네 역할 실제 작업 테스트 / installation check", cwd=ws).stdout.split()[0]
         result["thread"] = thread
         for tid, role, expects, after, deliver, body in TASKS:
-            args = ["new", str(folder), "--id", tid, "--assignee", role, "--expects", expects, "--thread", thread, "--body", body]
+            args = ["new", str(folder), "--id", tid, "--assignee", role, "--expects", expects, "--thread", thread, "--body", body, "--gate", "auto"]
             args += ["--after", after] if after else []
             args += ["--deliver", deliver] if deliver else []
             board(*args, cwd=ws)
@@ -165,9 +167,20 @@ def main():
         dl = board("deliver", str(folder), "reviews/selftest/check.md", "--thread", thread,
                    "--label", "설치 확인 결과 / installation check", cwd=ws, check=False)
         result["delivered"] = dl.returncode == 0
-        result["passed"] = result["ledger_intact"] and result["delivered"]
+        progress("Checking the graphical research board.")
+        dashboard = json.loads((rb.TEAM_HOME / "dashboard.json").read_text(encoding="utf-8"))
+        url = dashboard.get("url", "")
+        if not rb.re.fullmatch(r"http://127\.0\.0\.1:[0-9]+/", url):
+            raise RuntimeError("Graphical board URL is unavailable")
+        with urllib.request.urlopen(url + "api/projects?project=" + urllib.parse.quote(folder.name), timeout=30) as response:
+            snapshot = json.load(response)
+        result["dashboard_ready"] = any(p.get("name") == folder.name and len(p.get("tasks", [])) == 4
+            and all(t.get("status") == "done" for t in p["tasks"]) for p in snapshot.get("projects", []))
+        result["passed"] = result["ledger_intact"] and result["delivered"] and result["dashboard_ready"]
         if not result["passed"]:
-            result["error"] = "ledger chain broken" if not result["ledger_intact"] else f"delivery failed: {dl.stdout.strip()[-300:]}"
+            result["error"] = ("ledger chain broken" if not result["ledger_intact"] else
+                               "graphical board verification failed" if not result["dashboard_ready"] else
+                               f"delivery failed: {dl.stdout.strip()[-300:]}")
     except Exception as e:
         result["error"] = str(e)[:800]
     print(json.dumps(result, ensure_ascii=False))

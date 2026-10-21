@@ -3,7 +3,7 @@
 The spine of the paper. Nothing appears in the text that is not a row here, and the
 abstract and introduction may assert only `supported` rows.
 
-Maintained by `research-writer`. Verified by `research-reviewer` (referee mode). Never edited by
+Maintained by `research-lead`. Verified by `research-reviewer` (referee mode). Never edited by
 a reviewer.
 
 **Status:** `supported` — artifact exists and establishes it · `partial` — artifact

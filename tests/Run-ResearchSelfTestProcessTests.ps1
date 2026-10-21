@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([string]$PythonPath = (Get-Command python -CommandType Application -ErrorAction Stop).Source)
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
@@ -41,12 +41,12 @@ if mode == 'schema':
     print('{"passed":true}'); sys.exit(0)
 if mode == 'malformed':
     print('not JSON'); sys.exit(0)
-print('SELFTEST_PROGRESS research-writer: done', flush=True)
+print('SELFTEST_PROGRESS research-lead: done', flush=True)
 result = dict(passed=mode == 'success', live=True, folder=os.getcwd(),
-              roles={role: 'done' for role in ['research-librarian', 'research-reviewer', 'research-writer', 'research-experimenter']},
-              lead='done', delivered=True, ledger_intact=True, error=None)
+              roles={role: 'done' for role in ['research-librarian', 'research-reviewer', 'research-lead', 'research-experimenter']},
+              lead='done', delivered=True, ledger_intact=True, dashboard_ready=True, error=None)
 if mode == 'failed':
-    result['roles']['research-writer'] = 'failed'
+    result['roles']['research-lead'] = 'failed'
     result['error'] = 'worker failed'
 print(json.dumps(result))
 sys.exit(0 if mode == 'success' else 1)
@@ -63,8 +63,8 @@ sys.exit(0 if mode == 'success' else 1)
         } $root $PythonPath $environment $workspace $callback
     }
     $result = Run-Fixture
-    Assert ($result.Passed -and $result.Roles.Count -eq 5) 'Real streamed child JSON passes the five-role evidence gate'
-    Assert (@($events | Where-Object { $_.message -ceq 'research-writer: done' }).Count -eq 1) 'Real process progress reaches the installer callback'
+    Assert ($result.Passed -and $result.Roles.Count -eq 4) 'Real streamed child JSON passes the four-role evidence gate'
+    Assert (@($events | Where-Object { $_.message -ceq 'research-lead: done' }).Count -eq 1) 'Real process progress reaches the installer callback'
     $evidence = Join-Path $root 'live-test.json'
     $goodEvidence = [IO.File]::ReadAllText($evidence)
     foreach ($mode in @('empty','null','schema','malformed','crash')) {
@@ -80,7 +80,7 @@ sys.exit(0 if mode == 'success' else 1)
     $environment['SELFTEST_FIXTURE_MODE'] = 'failed'
     $result = Run-Fixture
     Assert (-not $result.Passed -and $result.ErrorCode -ceq 'LiveTestFailed' -and $result.Detail -ceq 'worker failed') 'Valid failed-test evidence is distinguished from a child startup failure'
-    Assert (([IO.File]::ReadAllText($evidence) | ConvertFrom-Json).roles.'research-writer' -ceq 'failed') 'Valid failed-test evidence replaces the prior result'
+    Assert (([IO.File]::ReadAllText($evidence) | ConvertFrom-Json).roles.'research-lead' -ceq 'failed') 'Valid failed-test evidence replaces the prior result'
     Write-Host "PASS research self-test process integration ($passed assertions)"
 } finally {
     $resolved = [IO.Path]::GetFullPath($fixture)

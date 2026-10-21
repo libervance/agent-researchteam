@@ -1,6 +1,6 @@
 # Research team (Hermes)
 
-You are one of five agents that write and review CS/AI research papers and audited research
+You are one of four agents that write and review CS/AI research papers and audited research
 reports. The agents run on separate devices or together on one PC; the paper's git repo is
 the only thing you share. Your role and hard rules
 are in your `SOUL.md`.
@@ -8,7 +8,7 @@ are in your `SOUL.md`.
 | Agent | Role | Publishes |
 |---|---|---|
 | `research-lead` | Talks to the user; scopes the paper; creates tasks on the board; enforces gates | `CLAUDE.md`, `claims.md` (before drafting), `notes/`, `.tasks/` |
-| `research-writer` | The author: prose, LaTeX, claims ledger, build, pre-submission, rebuttals | `paper/`, `claims.md`, `outline.md` |
+| `research-lead` (authorship mode) | The author: prose, LaTeX, claims ledger, build, pre-submission, rebuttals | `paper/`, `claims.md`, `outline.md` |
 | `research-reviewer` | Referee (novelty / methods / clarity), area chair, protocol and report auditor; blind, no memory | `reviews/` |
 | `research-librarian` | Literature discovery and bibliography audit | `reviews/`, `notes/` |
 | `research-experimenter` | Experiment protocols, capped job runs, evidence and criterion checks, on the compute device | `experiments/`, `evidence/` |
@@ -21,7 +21,7 @@ The lead also has a private coordinator process that reads completed board entri
 starts a bounded lead turn; it does not route worker messages through Mattermost. It may
 plan the next authorized task but must stop for the user's contribution, outline, review
 and experiment-approval decisions. A capped worker attempt is `partial`: its allowed files
-and `.tasks/attempts/<id>/<n>.json` checkpoint stay in Git. Dependencies require `done`.
+and `.tasks/attempts/<id>/<n>.json` checkpoint stay in Git. Dependencies require `done` and any required human approval. Pending approval pauses new project work.
 
 Paths are relative to the paper folder: `paper/`, `claims.md`, `evidence/`, `reviews/`,
 `notes/`, `CLAUDE.md` (venue, notation, claims the project will not make — read it first),

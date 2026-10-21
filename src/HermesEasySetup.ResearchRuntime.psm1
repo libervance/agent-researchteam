@@ -1,6 +1,6 @@
 ﻿Set-StrictMode -Version 2.0
 
-# The research team installer (team/ in this repository): five Hermes profiles, a team service
+# The research team installer (team/ in this repository): four Hermes profiles, a team service
 # (model router + board runners), research-lead's Mattermost gateway, and a live test.
 $script:ResearchManager = 'HermesEasySetup.ResearchTeam.v2'
 $script:ResearchLegacyManager = 'HermesEasySetup.Research.v1'
@@ -134,7 +134,7 @@ function Assert-HermesResearchOwnedTask {
 }
 
 function Register-HermesResearchGatewayTask {
-    param($Plan, [string]$CommandPath, [string]$HermesHome, [string]$InstallDir, [string]$ProfileName, [bool]$HasOwnership)
+    param($Plan, [string]$CommandPath, [string]$HermesHome, [string]$InstallDir, [string]$ProfileName, [bool]$HasOwnership, [string]$WorkspacePath)
     $existing = @(Get-HermesResearchGatewayTask -TaskName $Plan.TaskName)
     if ($existing.Count -gt 1) { throw 'ResearchTaskCollision' }
     if ($existing.Count -eq 1) {
@@ -159,6 +159,8 @@ function Register-HermesResearchGatewayTask {
         '$env:PYTHONNOUSERSITE = ''1''; $env:PYTHONSAFEPATH = ''1'''
         '$env:GIT_CONFIG_COUNT = ''1''; $env:GIT_CONFIG_KEY_0 = ''safe.directory'''
         ('$env:GIT_CONFIG_VALUE_0 = {0}' -f (& $quote $InstallDir))
+        ('$env:TERMINAL_CWD = {0}' -f (& $quote $WorkspacePath))
+        ('Set-Location -LiteralPath {0}' -f (& $quote $WorkspacePath))
         ('& {0} -p {1} gateway run --replace' -f (& $quote $CommandPath), (& $quote $ProfileName))
         'exit $LASTEXITCODE'
     ) -join [Environment]::NewLine
@@ -233,7 +235,7 @@ function Get-HermesResearchInterruptedTeam {
     if ($existing.Count -eq 0) { return $null }
     $root = Join-Path $Paths.RuntimeRoot 'research'
     $recordPath = Join-Path $root 'team\shared\team-home.txt'
-    if ($existing.Count -ne 5 -or -not (Test-HermesSafeTargetPath -LiteralPath $recordPath).Safe -or -not (Test-Path -LiteralPath $recordPath -PathType Leaf) -or
+    if ($existing.Count -ne $roles.Count -or -not (Test-HermesSafeTargetPath -LiteralPath $recordPath).Safe -or -not (Test-Path -LiteralPath $recordPath -PathType Leaf) -or
         [IO.File]::ReadAllText($recordPath).Trim() -ine $root) { throw ('기존 연구 프로필의 설치 소유 기록을 확인하지 못했습니다: ' + ($existing -join ', ') + '. 같은 설치 경로인지 확인하세요. 기존 프로필은 변경하지 않습니다.') }
     $teamID = $null
     foreach ($role in $roles) {
@@ -352,8 +354,8 @@ function Invoke-HermesResearchTeamSetup {
     if ($null -eq (Get-Command latexmk -CommandType Application -ErrorAction SilentlyContinue)) { $notes += 'TeX(latexmk)를 찾지 못했습니다. 원고 PDF 빌드가 필요한 집필 작업은 보류됩니다. MiKTeX 또는 TeX Live를 설치하면 바로 사용할 수 있습니다.' }
     $payload = Get-HermesResearchTeamPayload
 
-    # --- Mattermost: five distinct bots in the channel, and the one person allowed to ask ---
-    Publish-HermesResearchStage $ProgressCallback 'research-connection' '서로 다른 봇 5개와 연구 채널 참여, 요청자 계정을 확인합니다.' 8
+    # --- Mattermost: four distinct bots in the channel, and the one person allowed to ask ---
+    Publish-HermesResearchStage $ProgressCallback 'research-connection' '서로 다른 봇 4개와 연구 채널 참여, 요청자 계정을 확인합니다.' 8
     $connection = [pscustomobject]@{ ServerURL = $summary.ServerURL; HomeChannelID = $summary.HomeChannelID
         Agents = @($summary.Agents | ForEach-Object { [pscustomobject]@{ ProfileName = $_.ProfileName; BotToken = $tokens[$_.ProfileName] } }) }
     $identities = @(Test-HermesResearchTeamConnection -InputObject $connection)
@@ -437,12 +439,18 @@ function Invoke-HermesResearchTeamSetup {
             HermesHome = $paths.HermesHome; InstallDir = $paths.InstallDir; RuntimeRoot = $paths.RuntimeRoot
             ServerURL = $summary.ServerURL; HomeChannelID = $summary.HomeChannelID; Model = $summary.Model; WizardOptions = $options
             PayloadManifestSha256 = $payload.ManifestSha256; MigrationBackupPath = $migrationBackup
+            InactiveProfiles = @(if ($prior) { if ($prior.PSObject.Properties['Profiles']) { $prior.Profiles | Where-Object ProfileName -eq 'research-writer' }; if ($prior.PSObject.Properties['InactiveProfiles']) { $prior.InactiveProfiles } })
             SetupStatus = 'Installing'; Tasks = @($servicePlan.TaskName, $leadPlan.TaskName); Profiles = $plannedProfiles; UpdatedAt = (Get-Date).ToUniversalTime().ToString('o')
         }
         Write-HermesResearchAtomicText -LiteralPath $statePath -Text (($state | ConvertTo-Json -Depth 8) + "`n")
         $private = Join-Path $root 'private'
         Protect-HermesResearchPrivateDirectory -LiteralPath $private -OwnerSID $owner
         $bots = [ordered]@{}
+        $oldBots = Join-Path $private 'bots.json'
+        if (Test-Path -LiteralPath $oldBots) {
+            $savedBots = [IO.File]::ReadAllText($oldBots) | ConvertFrom-Json
+            if ($savedBots.PSObject.Properties['research-writer']) { $bots['research-writer'] = [string]$savedBots.'research-writer' }
+        }
         foreach ($agent in @($summary.Agents)) { $bots[$agent.ProfileName] = $tokens[$agent.ProfileName] }
         Write-HermesResearchAtomicText -LiteralPath (Join-Path $private 'bots.json') -Text (($bots | ConvertTo-Json) + "`n")
 
@@ -468,7 +476,7 @@ function Invoke-HermesResearchTeamSetup {
         $index = 0
         foreach ($agent in @($summary.Agents)) {
             $index++
-            Publish-HermesResearchStage $ProgressCallback 'research-profile' ('프로필 구성: {0} ({1}/5)' -f $agent.ProfileName, $index) (24 + 8 * $index)
+            Publish-HermesResearchStage $ProgressCallback 'research-profile' ('프로필 구성: {0} ({1}/4)' -f $agent.ProfileName, $index) (24 + 8 * $index)
             $identity = @($identities | Where-Object { $_.ProfileName -ceq $agent.ProfileName })[0]
             $isLead = ($agent.ProfileName -ceq 'research-lead')
             $values = @{}
@@ -483,7 +491,7 @@ function Invoke-HermesResearchTeamSetup {
             if ($gateway) { $remove += @('ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GOOGLE_API_KEY', 'GEMINI_API_KEY') }
             $manifest = Install-HermesResearchProfile -ProfileName $agent.ProfileName -Paths $paths -TeamRoot $teamRoot -CommandPath $command -Environment $environment -Python $python `
                 -TeamID $teamID -Placeholders $placeholders -Overlays $overlays -EnvValues $values -RemoveEnvPrefixes $remove -AllowExisting ([bool]$owned[$agent.ProfileName]) -EnableMattermost:$isLead
-            if (-not $isLead) { $profileManifest[$agent.ProfileName] = $manifest }
+            $profileManifest[$agent.ProfileName] = $manifest
             $records.Add([pscustomobject][ordered]@{ ProfileName = $agent.ProfileName; DisplayName = $agent.DisplayName; BotUserID = $identity.BotUserID; BotUsername = $identity.BotUsername; OwnsProfile = $true; Status = 'Configured' })
         }
         Write-HermesResearchAtomicText -LiteralPath (Join-Path $teamRoot 'shared\profile-manifest.json') -Text ((@{ schema = 1; profiles = $profileManifest } | ConvertTo-Json -Depth 6) + "`n")
@@ -497,18 +505,19 @@ function Invoke-HermesResearchTeamSetup {
         $null = Install-HermesResearchWorkspace -WorkspacePath $options.WorkspacePath -TeamRoot $teamRoot -Python $python -Environment $boardEnv -ChannelID $summary.HomeChannelID -Mention $mention
 
         $secrets = [ordered]@{ MATTERMOST_URL = $summary.ServerURL }
-        foreach ($agent in @($summary.Agents | Where-Object { $_.ProfileName -cne 'research-lead' })) { $secrets['MATTERMOST_TOKEN__' + $agent.ProfileName] = $tokens[$agent.ProfileName] }
+        foreach ($agent in @($summary.Agents)) { $secrets['MATTERMOST_TOKEN__' + $agent.ProfileName] = $tokens[$agent.ProfileName] }
         if ($gateway) { $secrets['RESEARCH_GATEWAY_SECRET'] = $gateway.Secret; $secrets['RESEARCH_GATEWAY_URL'] = $gateway.Url }
         $secretsPath = Join-Path $private 'service.env'
         Write-HermesResearchEnvValues -LiteralPath $secretsPath -Values $secrets -Header 'Research team service — bot tokens per runner. Managed by Hermes Easy Setup.'
         $runners = New-Object System.Collections.Generic.List[object]
-        foreach ($role in @('research-librarian', 'research-experimenter', 'research-writer')) { $runners.Add([ordered]@{ role = $role; slot = 1; task_timeout = 60 * [int]$options.TaskTimeoutMinutes; heartbeat = 1800 }) }
+        foreach ($role in @('research-librarian', 'research-experimenter', 'research-lead')) { $runners.Add([ordered]@{ role = $role; slot = 1; task_timeout = 60 * [int]$options.TaskTimeoutMinutes; heartbeat = 1800 }) }
         for ($slot = 1; $slot -le [int]$options.ReviewerSlots; $slot++) { $runners.Add([ordered]@{ role = 'research-reviewer'; slot = $slot; task_timeout = 60 * [int]$options.TaskTimeoutMinutes; heartbeat = 1800 }) }
         $service = [ordered]@{
             team_home = $root; hermes_home = $paths.HermesHome; python = $python; hermes = $command
             board = (Join-Path $teamRoot 'shared\research_board.py'); papers_file = (Join-Path $root 'papers')
             secrets_file = $secretsPath; runners = $runners.ToArray()
             coordinator = [ordered]@{ enabled = $true; task_timeout = 1200 }
+            dashboard = [ordered]@{ enabled = $true; workspace = $options.WorkspacePath }
             gateway = $(if ($gateway) { [ordered]@{ dir = $gateway.Dir; port = $gateway.Port; litellm = $gateway.Litellm } } else { $null })
         }
         Write-HermesResearchAtomicText -LiteralPath $serviceConfig -Text (($service | ConvertTo-Json -Depth 6) + "`n")
@@ -521,10 +530,10 @@ function Invoke-HermesResearchTeamSetup {
 
         Publish-HermesResearchStage $ProgressCallback 'research-service' '연구팀 서비스(모델 라우터·실행기)와 총괄 채팅을 로그인 자동 실행으로 등록하고 시작합니다.' 72
         Register-HermesResearchServiceTask -Plan $servicePlan -Python $python -ServiceScript $serviceScript -ConfigPath $serviceConfig -HermesHome $paths.HermesHome -HasOwnership ($null -ne $prior -and $prior.Kind -ceq 'Team')
-        Register-HermesResearchGatewayTask -Plan $leadPlan -CommandPath $command -HermesHome $paths.HermesHome -InstallDir $paths.InstallDir -ProfileName 'research-lead' -HasOwnership ($null -ne $prior -and $prior.Kind -ceq 'Team')
+        Register-HermesResearchGatewayTask -Plan $leadPlan -CommandPath $command -HermesHome $paths.HermesHome -InstallDir $paths.InstallDir -ProfileName 'research-lead' -WorkspacePath $options.WorkspacePath -HasOwnership ($null -ne $prior -and $prior.Kind -ceq 'Team')
         $startedAt = Get-Date
         Start-HermesResearchGatewayTask -Plan $servicePlan
-        $null = Wait-HermesResearchServiceReady -ResearchRoot $root -StartedAfter $startedAt -ExpectedChildren ($runners.Count + 1 + $(if ($gateway) { 1 } else { 0 })) -Gateway ($null -ne $gateway)
+        $null = Wait-HermesResearchServiceReady -ResearchRoot $root -StartedAfter $startedAt -ExpectedChildren ($runners.Count + 2 + $(if ($gateway) { 1 } else { 0 })) -Gateway ($null -ne $gateway)
         Start-HermesResearchGatewayTask -Plan $leadPlan
         Wait-HermesResearchGatewayReady -CommandPath $command -ProfileName 'research-lead' -Environment $environment -Plan $leadPlan -TimeoutSeconds 90
 
@@ -533,7 +542,7 @@ function Invoke-HermesResearchTeamSetup {
         $testEnv['MATTERMOST_URL'] = $summary.ServerURL; $testEnv['MATTERMOST_TOKEN'] = $tokens['research-lead']
         $workflowTest = Invoke-HermesResearchSelfTest -ResearchRoot $root -Python $python -Environment $testEnv -WorkspacePath $options.WorkspacePath -ChannelID $summary.HomeChannelID -CommandPath $command -Mention $mention -ProgressCallback $ProgressCallback
         $pending = @()
-        if (-not $workflowTest.Passed) { $pending += ('실제 다섯 역할 테스트 미통과: ' + $workflowTest.ErrorCode + $(if ($workflowTest.Detail) { ' — ' + $workflowTest.Detail } else { '' })) }
+        if (-not $workflowTest.Passed) { $pending += ('실제 네 역할 테스트 미통과: ' + $workflowTest.ErrorCode + $(if ($workflowTest.Detail) { ' — ' + $workflowTest.Detail } else { '' })) }
         return [pscustomobject]@{
             Succeeded = [bool]$workflowTest.Passed; PartialSuccess = -not $workflowTest.Passed; ExecutionReady = [bool]$workflowTest.Passed; WorkflowTest = $workflowTest
             ExecutionMode = 'ResearchTeam'; PendingSettings = $pending; Profiles = $records.ToArray(); StatePath = $statePath; MigrationBackupPath = $migrationBackup

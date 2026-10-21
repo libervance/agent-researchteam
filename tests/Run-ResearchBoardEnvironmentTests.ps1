@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([string]$PythonPath = (Get-Command python -CommandType Application -ErrorAction Stop).Source)
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'

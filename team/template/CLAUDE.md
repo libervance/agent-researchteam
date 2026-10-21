@@ -47,7 +47,7 @@ Overclaims this project has decided against, so no drafting pass reintroduces th
 ## Repo layout
 
 ```
-paper/{main.tex,sections/,figures/,refs.bib}   only research-writer edits this
+paper/{main.tex,sections/,figures/,refs.bib}   only research-lead edits this
 claims.md                                      the ledger + experiment plan
 outline.md                                     section plan, claim IDs per paragraph
 notes/prior-art.{md,bib}                       closest prior work, verified BibTeX

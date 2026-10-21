@@ -1,6 +1,6 @@
 ---
 name: research-round
-description: Runs one review round on a CS/AI paper — a research-writer task drafts or revises, three research-reviewer referee tasks (novelty, methods, clarity) plus a research-librarian bibliography audit run in parallel on their own devices, then a research-reviewer chair task writes the ranked revision plan; all through the paper's git task board. Use whenever the user asks to review, referee, critique, pressure-test or get a meta-review of a paper draft; to run the next round / another round; to execute or apply the revision plan from the last meta.md; to re-run one reviewer or only the bibliography audit; or to check whether a paper is ready to submit. Not for a standalone literature search (one research-librarian task) or a one-off LaTeX fix (one research-writer task).
+description: Runs one review round on a CS/AI paper — a research-lead task drafts or revises, three research-reviewer referee tasks (novelty, methods, clarity) plus a research-librarian bibliography audit run in parallel on their own devices, then a research-reviewer chair task writes the ranked revision plan; all through the paper's git task board. Use whenever the user asks to review, referee, critique, pressure-test or get a meta-review of a paper draft; to run the next round / another round; to execute or apply the revision plan from the last meta.md; to re-run one reviewer or only the bibliography audit; or to check whether a paper is ready to submit. Not for a standalone literature search (one research-librarian task) or a one-off LaTeX fix (one research-lead task).
 version: 1.0.0
 metadata:
   hermes:
@@ -50,7 +50,7 @@ never mangles it.
 
 5. **Stop rule, checked before starting a new round.** If `round-<N-1>/meta.md` has no
    `CLAIM-CHANGING` item, the loop is done — tell the user and offer the writer's
-   pre-submission pass instead (one `research-writer` task, `--skills presubmission`). If N
+   pre-submission pass instead (one `research-lead` task, `--skills presubmission`). If N
    would be 4, stop: a finding that survived three rounds means the claim is wrong, not the
    wording. Report which findings persisted and let the user decide whether to cut the claim.
 
@@ -70,7 +70,7 @@ The `after:` gates make the order: reviews start only when the writer is `done`,
 only when all four reviews are `done`. A writer that cannot build ends `blocked`, and
 nothing downstream starts — reviewing a stale PDF would waste four agents.
 
-**Writer** — `--id r<N>-writer --assignee research-writer --expects paper/main.pdf --deliver
+**Writer** — `--id r<N>-writer --assignee research-lead --expects paper/main.pdf --deliver
 paper/main.pdf` (the runner attaches the built PDF to the round thread, verified):
 
 > Read `CLAUDE.md` first. <Task: "Execute `reviews/round-<N-1>/meta.md` in its ranked order" |
@@ -156,7 +156,7 @@ pass — a revision that needs new evidence cannot be written until the evidence
 - **A task stuck `running` for hours:** its device probably died. Ask the user; a restarted
   runner releases its own stale claims automatically, or `"${PB[@]}" edit $P <id> --status ready`.
 - **Never edit `paper/` yourself during a round.** A coordinator who fixes the manuscript
-  collapses critique and fix — route every change through a `research-writer` task.
+  collapses critique and fix — route every change through a `research-lead` task.
 - **Never fill a gap yourself.** If a review is missing, do not write one from your own
   reading; that would put a coordinator's view — which has seen the drafting — into a record
   meant to be blind.

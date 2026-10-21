@@ -1,6 +1,6 @@
 ---
 name: research-experiment
-description: Takes one experiment from "this claim needs evidence" to evidence in the paper — pick the claim and budget with the user, a research-experimenter design task writes a pre-registered protocol, a research-reviewer checks it before compute is spent, the user approves (always), the experimenter launches capped jobs and collects every run against the pre-written criteria, and research-writer updates the ledger. Use when the user asks to run, plan, design or propose an experiment, to test a claim, to act on an EVIDENCE-NEEDED item from a review round, to fill a \pending result, to check on or approve a running experiment, or asks what to test next.
+description: Takes one experiment from "this claim needs evidence" to evidence in the paper — pick the claim and budget with the user, a research-experimenter design task writes a pre-registered protocol, a research-reviewer checks it before compute is spent, the user approves (always), the experimenter launches capped jobs and collects every run against the pre-written criteria, and research-lead updates the ledger. Use when the user asks to run, plan, design or propose an experiment, to test a claim, to act on an EVIDENCE-NEEDED item from a review round, to fill a \pending result, to check on or approve a running experiment, or asks what to test next.
 version: 1.0.0
 metadata:
   hermes:
@@ -134,7 +134,7 @@ waits for the new jobs by itself. That is routine; no approval needed.
 
 ## Step 6 — Write-up
 
-When the user says so (after reading `result.md`): one `research-writer` task
+When the user says so (after reading `result.md`): one `research-lead` task
 `--id x$K-writeup --thread $TH --expects claims.md`:
 
 > Experiment **x<K>** finished: `experiments/x<K>/result.md`, evidence in

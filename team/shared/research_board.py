@@ -46,7 +46,7 @@ Safeguards: before each task the runner checks the profile's SOUL.md and team sk
 the manifest written at install (profile-manifest.json next to this file); a changed file blocks the
 task instead of running an agent with unknown instructions. A run that fails on a transient
 model error (rate limit, overload, timeout, 5xx) is retried with backoff. The agent's process
-never receives the bot token or the gateway secret.
+has service bot tokens and gateway secrets removed from its environment.
 
 Delivery: a task may carry `deliver: <path>[:docx], ...`. When it is done the runner attaches
 each file to the task's thread as its own bot, downloads it again and compares SHA-256; a
@@ -101,11 +101,12 @@ from pathlib import Path
 
 TASKS = ".tasks"
 LEDGER = f"{TASKS}/ledger.jsonl"
-FIELDS = ["id", "assignee", "status", "after", "ready_when", "expects", "skills", "thread", "notify_done", "gate",
+FIELDS = ["gate_revision", "id", "assignee", "status", "after", "ready_when", "expects", "skills", "thread", "notify_done", "gate",
           "deliver", "resume_policy", "max_attempts", "attempt", "stop_reason", "claimed_by", "base", "updated"]
 TERMINAL = {"done", "partial", "blocked", "failed"}
 # What each role may publish. Everything else a worker leaves behind is discarded.
 OUTPUTS = {
+    "research-lead": ["paper", "claims.md", "outline.md", "CLAUDE.md", "REVIEW_RUBRIC.md", "notes"],
     "research-writer": ["paper", "claims.md", "outline.md"],
     "research-reviewer": ["reviews"],
     "research-librarian": ["reviews", "notes"],
@@ -114,6 +115,7 @@ OUTPUTS = {
 BLIND = {"research-reviewer", "research-librarian"}
 # Skills every task of a role preloads (Hermes has no per-profile auto-load), plus the task's own.
 ROLE_SKILLS = {
+    "research-lead": ["manuscript-check"],
     "research-writer": ["manuscript-check"],
     "research-reviewer": ["lit-search"],
     "research-librarian": ["lit-search"],
@@ -172,7 +174,8 @@ FOOTER = """
 ---
 Runner note: you are task `{id}`, running unattended as {role}. Your working directory is
 the paper folder ({cwd}); every path in this task is relative to it. There is no human to
-answer questions — if you cannot proceed, block. Do not run git; the runner commits your
+answer questions — if you cannot proceed, block. This is assigned-task mode: complete the
+requested work yourself; do not delegate, create tasks, or approve checkpoints. Do not run git; the runner commits your
 output. End your reply with exactly one line:
 `STATUS: done` or `STATUS: blocked — <reason>`.
 """
@@ -306,7 +309,92 @@ def tasks(repo):
 
 
 def waiting_on(meta, board):
-    return [a for a in csv(meta.get("after")) if a not in board or board[a][1].get("status") != "done"]
+    return [a for a in csv(meta.get("after")) if a not in board or board[a][1].get("status") != "done"
+            or needs_approval(board[a][0].parent.parent, board[a][1])]
+
+
+def effective_assignee(role):
+    # Historical task IDs and task files remain intact; the inactive writer's queue
+    # is handled by lead until a future release explicitly restores that role.
+    return "research-lead" if role == "research-writer" else role
+
+
+def approval_token(repo, meta):
+    task = Path(repo) / TASKS / (meta["id"] + ".md")
+    parts = [sha256_file(task)]
+    outputs = {}
+    for line in ledger_lines(repo):
+        entry = json.loads(line)
+        if entry.get("task") == meta["id"]:
+            outputs = entry.get("outputs", {})
+    for rel in dict.fromkeys(csv(meta.get("expects")) + list(outputs)):
+        path = (Path(repo) / rel).resolve()
+        if path.is_relative_to(Path(repo).resolve()) and path.is_file():
+            # Bind approval to the committed blob, independent of its size. Uncommitted
+            # scratch changes are not published research results.
+            oid = git(repo, "rev-parse", "--verify", f"HEAD:{rel}", check=False).stdout.strip()
+            if re.fullmatch(r"[a-f0-9]{40,64}", oid):
+                parts.append(rel + ":" + oid)
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:16]
+
+
+def needs_approval(repo, meta):
+    if meta.get("gate") != "human" or meta.get("status") != "done":
+        return False
+    path = Path(repo) / TASKS / "approvals" / (meta["id"] + ".json")
+    try:
+        record = json.loads(rd(path))
+        return record.get("token") != approval_token(repo, meta) or not record.get("post_id")
+    except (OSError, ValueError):
+        return True
+
+
+def pending_approvals(repo):
+    return [meta for _, meta, _ in tasks(repo).values() if needs_approval(repo, meta)]
+
+
+def accept_approval(repo, meta, post, user_id, channel):
+    """Only a real post by the configured human, in the task thread, can release a gate."""
+    if not needs_approval(repo, meta):
+        return False
+    token = approval_token(repo, meta)
+    message = re.sub(r"^@[^\s]+\s+", "", str(post.get("message", "")).strip())
+    if (not user_id or post.get("user_id") != user_id or post.get("channel_id") != channel
+            or post.get("delete_at", 0) or not meta.get("thread")
+            or post.get("root_id") != meta["thread"]
+            or message.lower() != f"approve {meta['id']} {token}".lower()):
+        return False
+    path = Path(repo) / TASKS / "approvals" / (meta["id"] + ".json")
+    path.parent.mkdir(exist_ok=True)
+    wr(path, json.dumps({"task": meta["id"], "token": token, "post_id": post["id"],
+                        "user_id": user_id, "approved_at": now()}, sort_keys=True) + "\n")
+    publish(repo, [path.relative_to(repo)], f"board: human approved {meta['id']}")
+    return True
+
+
+def collect_approvals(repo):
+    pending = pending_approvals(repo)
+    if not pending:
+        return []
+    note = Notifier(repo, "research-lead")
+    username = note.mention.removeprefix("@")
+    if not note.creds or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{1,63}", username):
+        return []
+    human = mm_api(note.creds, "GET", f"/users/username/{username}")
+    if human.get("is_bot") or human.get("delete_at", 0):
+        return []
+    approved, threads = [], {}
+    for meta in pending:
+        thread = meta.get("thread", "")
+        if not thread:
+            continue
+        if thread not in threads:
+            threads[thread] = mm_api(note.creds, "GET", f"/posts/{thread}/thread").get("posts", {})
+        for post in threads[thread].values():
+            if accept_approval(repo, meta, post, human.get("id"), note.channel):
+                approved.append(meta)
+                break
+    return approved
 
 
 # ---------- git plumbing ----------
@@ -955,6 +1043,7 @@ def cmd_new(a):
     if p.exists():  # idempotent: re-running a skill step never duplicates a task
         print(f"{a.id}: exists, status {load(p)[0].get('status')}")
         return
+    a.assignee = effective_assignee(a.assignee)
     if a.assignee not in OUTPUTS:
         die(f"assignee must be one of {', '.join(OUTPUTS)}")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", a.id):
@@ -973,6 +1062,10 @@ def cmd_new(a):
             "resume_policy": a.resume_policy or ("manual" if a.assignee == "research-experimenter" else "auto"),
             "max_attempts": str(a.max_attempts), "attempt": "0", "stop_reason": "",
             "updated": now()}
+    if a.gate == "human" and not meta["thread"]:
+        meta["thread"] = Notifier(repo, "research-lead").post(f"**{a.id}** — checkpoint task for {a.assignee}. Progress and your approval request will appear here.")
+        if not meta["thread"]:
+            die("Cannot create a human checkpoint without a Mattermost thread; check the board channel and bot connection.")
     save(p, meta, body.strip() + "\n")
     publish(repo, [p.relative_to(repo)], f"board: new task {a.id} -> {a.assignee}")
     print(f"{a.id}: created for {a.assignee}" + (f", after {a.after}" if a.after else ""))
@@ -989,6 +1082,8 @@ def cmd_list(a):
         st = m.get("status")
         w = waiting_on(m, board) if st == "ready" else []
         extra = f"  waiting on {', '.join(w)}" if w else ""
+        if needs_approval(repo, m):
+            extra += f"  AWAITING USER: approve {tid} {approval_token(repo, m)}"
         if st == "ready" and not w and m.get("ready_when"):
             extra = f"  until {m['ready_when']} (checked on the worker's device)"
         who = f"  [{m['claimed_by']}]" if m.get("claimed_by") and st == "running" else ""
@@ -1023,11 +1118,16 @@ def cmd_edit(a):
     if not p.exists():
         die(f"{a.id}: no such task")
     meta, body = load(p)
+    if a.gate is not None:
+        if a.gate == "auto" and needs_approval(repo, meta):
+            die("Review and approve this completed checkpoint; changing its gate cannot bypass approval.")
+        meta["gate"] = a.gate
     if a.after is not None:
         meta["after"] = a.after
     if a.append:
         body = body.rstrip() + "\n\n" + a.append.strip() + "\n"
     if a.status:
+        meta["gate_revision"] = "true" if a.status == "ready" and needs_approval(repo, meta) else ""
         meta["status"] = a.status
         if a.status == "ready":
             meta["claimed_by"] = ""
@@ -1214,6 +1314,7 @@ def execute(a, clone, p, me):
         if work == clone:
             exclude_locally(clone, ".hermes.md")
     env, sens, gw = child_env(clone, profile)
+    env["TERMINAL_CWD"] = str(work.resolve())
     prior = ""
     attempt_num = int(meta.get("attempt") or 1)
     if attempt_num > 1:
@@ -1409,6 +1510,7 @@ def coordinate_event(a, clone, event):
     if status not in TERMINAL:
         return True
     env, sens, gw = child_env(clone, "research-lead")
+    env["TERMINAL_CWD"] = str(clone.resolve())
     if sens in SENSITIVE_NOTE:
         refusal = gateway_probe(env, "research-lead") if gw else "no local model gateway for a non-public paper"
         if refusal:
@@ -1459,6 +1561,47 @@ def coordinate_event(a, clone, event):
         query.unlink(missing_ok=True)
 
 
+def notify_event(clone, event, meta):
+    """Deterministic lead updates, retried until delivered; independent of model wording."""
+    key = hashlib.sha256((str(clone) + json.dumps(event, sort_keys=True)).encode()).hexdigest()
+    receipt = TEAM_HOME / "run" / "notifications" / (key + ".json")
+    if receipt.exists():
+        return
+    status, tid = event.get("status", "unknown"), event.get("task", "unknown")
+    outputs = ", ".join(f"`{p}`" for p in event.get("outputs", {})) or "see task details on the research board"
+    text = f"**{repo_name(str(clone))} / {tid}: {status}**\nOutputs: {outputs}."
+    if status in ("failed", "blocked", "partial"):
+        text += "\nWork needs attention; saved results are retained. " + str(event.get("stop_reason") or "Review the task report before continuing.")
+    gate = needs_approval(clone, meta) if meta.get("id") else False
+    if gate:
+        text += ("\n**Your approval is required. New tasks in this project are paused.** "
+                 "Review the outputs, then reply in this thread with:\n"
+                 f"`approve {tid} {approval_token(clone, meta)}`\n"
+                 "For changes, tell research-lead what to revise instead of approving.")
+    dashboard = TEAM_HOME / "dashboard.json"
+    if dashboard.is_file():
+        try:
+            text += "\nResearch board (on the host PC): " + json.loads(rd(dashboard))["url"]
+        except (ValueError, KeyError):
+            pass
+    note = Notifier(clone, "research-lead")
+    pid = note.post(text, meta.get("thread", ""), ping=gate or status in ("failed", "blocked", "partial"))
+    if not pid:
+        raise RuntimeError("lead notification pending; Mattermost delivery will be retried")
+    receipt.parent.mkdir(parents=True, exist_ok=True)
+    write_state(receipt, {"post_id": pid, "sent_at": now()})
+
+
+def notify_runtime_error(clone, role):
+    # Do not echo process errors: they may contain URLs or credentials. One durable
+    # notice per project/role prevents a failing poll loop from flooding the channel.
+    try:
+        notify_event(clone, {"task": "service-" + role, "status": "blocked",
+                            "stop_reason": "The background service could not synchronize or process this project. Saved work is retained. Check the research board/service logs before retrying."}, {})
+    except Exception:
+        pass  # delivery will be retried on the next failing poll
+
+
 def cmd_coordinate(a):
     """Consume each new ledger result once, using project state rather than chat mentions."""
     a.hermes = a.hermes or os.environ.get("RESEARCH_TEAM_HERMES") or shutil.which("hermes")
@@ -1484,6 +1627,38 @@ def cmd_coordinate(a):
                     git_identity(clone, "research-lead")
                 else:
                     sync(clone)
+                # Upgrade historical gates that did not record a task thread.
+                for meta in pending_approvals(clone):
+                    if not meta.get("thread"):
+                        task_path, _, body = tasks(clone)[meta["id"]]
+                        thread = Notifier(clone, "research-lead").post(f"**{meta['id']}** — review this checkpoint before continuing.")
+                        if not thread:
+                            raise RuntimeError("checkpoint thread delivery pending")
+                        meta["thread"] = thread
+                        save(task_path, meta, body)
+                        publish(clone, [task_path.relative_to(clone)], "board: attach checkpoint thread")
+                collect_approvals(clone)
+                # Approval commits are the durable queue: restart after approval cannot
+                # lose the lead continuation. Receipts are written only after handling.
+                acknowledged = state.setdefault("approvals:" + key, [])
+                approved = []
+                for _, meta, _ in tasks(clone).values():
+                    record = clone / TASKS / "approvals" / (meta["id"] + ".json")
+                    if meta.get("status") == "done" and meta.get("gate") == "human" and record.is_file() and not needs_approval(clone, meta):
+                        identity = meta["id"] + ":" + approval_token(clone, meta)
+                        if identity not in acknowledged:
+                            approved.append((identity, meta))
+                if approved and not pending_approvals(clone):
+                    meta = approved[-1][1]
+                    try:
+                        coordinate_event(a, clone, {"task": meta["id"], "status": "done", "human_approval_recorded": True})
+                    except LeadTurnPartial:
+                        Notifier(clone, "research-lead").post("Background lead work paused at its limit; partial planning is saved. Ask research-lead to review the board and continue.", meta.get("thread", ""), ping=True)
+                    for identity, meta in approved:
+                        if not Notifier(clone, "research-lead").post(f"Approval recorded for **{meta['id']}**. The next eligible tasks may proceed.", meta.get("thread", "")):
+                            raise RuntimeError("approval acknowledgement delivery pending")
+                        acknowledged.append(identity)
+                        write_state(state_path, state)
                 lines = ledger_lines(clone)
                 if ledger_check(lines) is not None:
                     raise RuntimeError("ledger hash chain is broken; lead event processing paused")
@@ -1498,9 +1673,10 @@ def cmd_coordinate(a):
                     if event.get("status") in TERMINAL:
                         task_file = clone / TASKS / f"{event.get('task', '')}.md"
                         meta = load(task_file)[0] if task_file.is_file() else {}
+                        notify_event(clone, event, meta)
                         continuing = (event.get("status") == "partial" and meta.get("resume_policy") == "auto"
                                       and int(event.get("attempt") or 1) < int(meta.get("max_attempts") or 1))
-                        human_gate = event.get("status") == "done" and meta.get("gate") == "human"
+                        human_gate = meta.get("gate") == "human" or bool(pending_approvals(clone))
                         experiment_pause = (event.get("status") == "partial" and
                                             meta.get("assignee") == "research-experimenter")
                         if not (continuing or human_gate or experiment_pause):
@@ -1518,6 +1694,7 @@ def cmd_coordinate(a):
                     lines = ledger_lines(clone)
             except (RuntimeError, OSError, ValueError) as e:
                 print(f"[{now()}] lead coordinator {repo_name(url)}: {e}", file=sys.stderr, flush=True)
+                notify_runtime_error(clone, "lead-coordinator")
         if a.once:
             return
         time.sleep(a.interval)
@@ -1537,7 +1714,7 @@ def cmd_run(a):
         die("hermes not found — pass --hermes or set RESEARCH_TEAM_HERMES")
     if not a.papers_file and not a.remotes and (TEAM_HOME / "papers").is_file():
         a.papers_file = str(TEAM_HOME / "papers")
-    if "RESEARCH_GATEWAY_API_KEY" in profile_env(a.profile or a.role):
+    if a.role != "research-lead" and "RESEARCH_GATEWAY_API_KEY" in profile_env(a.profile or a.role):
         die(f"remove RESEARCH_GATEWAY_API_KEY from the {a.profile or a.role} profile's .env — the runner sets it per "
             "task from each paper's sensitivity (keep only RESEARCH_GATEWAY_SECRET there)")
     me = f"{socket.gethostname()}/{a.role}/slot{a.slot}"
@@ -1568,13 +1745,15 @@ def cmd_run(a):
                 if url not in first:  # a crash left our own claims dangling: release them
                     first.add(url)
                     for tid, (p, m, b) in board.items():
-                        if m.get("status") == "running" and m.get("claimed_by") == me:
+                        if m.get("status") == "running" and (m.get("claimed_by") == me or
+                                (a.role == "research-lead" and m.get("assignee") == "research-writer")):
                             m.update(status="ready", claimed_by="", updated=now())
                             save(p, m, b)
                             publish(c, [p.relative_to(c).as_posix()], f"board: release stale claim {tid}")
                     board = tasks(c)
                 for tid, (p, m, _) in board.items():
-                    if m.get("assignee") == a.role and m.get("status") == "ready" and not waiting_on(m, board):
+                    if (effective_assignee(m.get("assignee")) == a.role and m.get("status") == "ready"
+                            and not waiting_on(m, board) and (not pending_approvals(c) or m.get("gate_revision") == "true")):
                         ok, why, lost = condition_met(c, m.get("ready_when", ""))
                         if not ok:
                             last, pinged = waits.get(tid, (0, False))
@@ -1599,6 +1778,7 @@ def cmd_run(a):
                         break
             except Exception as e:  # keep other projects alive; expose failures to the installer
                 errors[c.name] = {"remote": url, "error": str(e)[:1000], "updated": now()}
+                notify_runtime_error(c, a.role)
                 print(f"[{now()}] {c.name}: {e}", file=sys.stderr, flush=True)
         if a.status_file:
             try:
@@ -1646,7 +1826,7 @@ def main():
     s.add_argument("--thread", help="Mattermost post id of the round thread (from `thread`)")
     s.add_argument("--ready-when", help="built-in wait condition, e.g. 'jobs-done x1'")
     s.add_argument("--notify-done", help="text posted with an @mention when the task is done (e.g. an approval request)")
-    s.add_argument("--gate", choices=["auto", "human"], default="auto", help="human gate prevents background lead continuation")
+    s.add_argument("--gate", choices=["auto", "human"], default="human", help="human approval pauses the project after completion; auto is for internal subtasks")
     s.add_argument("--deliver", help="files to attach to the thread when done: <path> or <report.md>:docx, comma-separated")
     s.add_argument("--resume-policy", choices=["auto", "manual"], help="auto resumes capped read/write tasks; experiment tasks default to manual")
     s.add_argument("--max-attempts", type=int, default=2, help="maximum capped attempts before lead intervention (1-5)")
@@ -1664,7 +1844,7 @@ def main():
     s.add_argument("--poll", type=int, default=20); s.set_defaults(fn=cmd_wait)
     s = sub.add_parser("edit", help="change after/status or append a note to a task")
     s.add_argument("paper"); s.add_argument("id"); s.add_argument("--after"); s.add_argument("--append")
-    s.add_argument("--status", choices=["ready", "partial", "blocked", "failed", "done"]); s.set_defaults(fn=cmd_edit)
+    s.add_argument("--status", choices=["ready", "partial", "blocked", "failed", "done"]); s.add_argument("--gate", choices=["auto", "human"], help="set a checkpoint; cannot bypass a pending approval"); s.set_defaults(fn=cmd_edit)
     s = sub.add_parser("ledger", help="the append-only record of finished tasks")
     s.add_argument("paper"); s.add_argument("--verify", action="store_true", help="only check the hash chain")
     s.add_argument("--no-sync", action="store_true"); s.set_defaults(fn=cmd_ledger)

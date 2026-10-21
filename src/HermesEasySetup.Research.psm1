@@ -1,19 +1,17 @@
 ﻿Set-StrictMode -Version 2.0
 
-# The paper-writing research team (team/ in this repository): five Hermes profiles.
-# research-lead talks to the user over Mattermost; the other four are served by board runners.
+# The paper-writing research team (team/ in this repository): four Hermes profiles.
+# research-lead talks to the user over Mattermost; the other three are served by board runners.
 $script:ResearchTeamSchemaVersion = 2
 $script:ResearchTeamRoles = @(
-    [pscustomobject][ordered]@{ ProfileName = 'research-lead'; DisplayName = '총괄'; Runner = $false; Blind = $false
-        Summary = '사용자와 대화하고 범위를 정하며 작업 보드에 일을 배정하고 단계별 확인 지점을 지킵니다. 원고를 쓰거나 심사하지 않습니다.' }
+    [pscustomobject][ordered]@{ ProfileName = 'research-lead'; DisplayName = '총괄·집필'; Runner = $true; Blind = $false
+        Summary = '사용자와 대화하고 범위를 정하며 작업 보드에 일을 배정하고 단계별 확인 지점을 지킵니다. 원고·LaTeX·보고서 집필을 담당하며 심사는 독립 심사자에게 맡깁니다.' }
     [pscustomobject][ordered]@{ ProfileName = 'research-librarian'; DisplayName = '조사'; Runner = $true; Blind = $true
         Summary = '선행 연구·문헌 조사와 보고서 초안을 실제로 읽은 출처로 작성하고, 원고의 인용을 검증합니다.' }
     [pscustomobject][ordered]@{ ProfileName = 'research-experimenter'; DisplayName = '분석·실험'; Runner = $true; Blind = $false
         Summary = '실험 계획(사전 등록)을 설계하고 승인 후 시간 제한이 있는 작업을 실행해 결과를 evidence/에 수집·판정합니다.' }
     [pscustomobject][ordered]@{ ProfileName = 'research-reviewer'; DisplayName = '감사·심사'; Runner = $true; Blind = $true
         Summary = '원고를 블라인드로 심사(신규성·방법·명료성)하고 의장 종합, 실험 계획 검토, 보고서 감사를 합니다. 원본을 수정하지 않습니다.' }
-    [pscustomobject][ordered]@{ ProfileName = 'research-writer'; DisplayName = '집필'; Runner = $true; Blind = $false
-        Summary = '원고(LaTeX)·주장 목록·빌드·제출 전 점검·반박문을 담당합니다. 원고를 수정하는 유일한 역할입니다.' }
 )
 $script:ResearchTeamProfiles = @($script:ResearchTeamRoles | ForEach-Object { $_.ProfileName })
 $script:ResearchModelModes = @('Gateway', 'Codex')
@@ -170,13 +168,13 @@ function Assert-HermesResearchTeamInput {
     if ($InputObject.HomeChannelID -isnot [string] -or $InputObject.HomeChannelID -cnotmatch '^[a-z0-9]{26}$') { throw 'Home Channel ID는 소문자·숫자 26자리여야 합니다.' }
     $model = Assert-HermesResearchModelInput $InputObject.Model
     $agentList = @($InputObject.Agents)
-    if ($agentList.Count -ne $script:ResearchTeamProfiles.Count) { throw '연구 팀은 정확히 다섯 에이전트여야 합니다.' }
+    if ($agentList.Count -ne $script:ResearchTeamProfiles.Count) { throw '연구 팀은 정확히 네 에이전트여야 합니다.' }
     $seenProfiles = @(); $seenNames = @(); $seenTokens = @()
     $agents = New-Object System.Collections.Generic.List[object]
     foreach ($agent in $agentList) {
         Assert-HermesResearchFields $agent @('ProfileName', 'DisplayName', 'BotToken') -Label '에이전트'
         if ($agent.ProfileName -isnot [string] -or $script:ResearchTeamProfiles -cnotcontains $agent.ProfileName -or $seenProfiles -ccontains $agent.ProfileName) {
-            throw '다섯 연구 프로필을 중복 없이 사용하세요.'
+            throw '네 연구 프로필을 중복 없이 사용하세요.'
         }
         Assert-HermesResearchText $agent.DisplayName 200 '에이전트 표시명'
         $name = $agent.DisplayName.Trim()

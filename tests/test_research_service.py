@@ -29,7 +29,7 @@ class ServiceTests(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="service-test-"))
         board = self.tmp / "board.py"; board.write_text(FAKE_BOARD)
         secrets = self.tmp / "secrets.env"
-        secrets.write_text("MATTERMOST_URL=http://127.0.0.1:1\nMATTERMOST_TOKEN__research-writer=" + "w" * 26 +
+        secrets.write_text("MATTERMOST_URL=http://127.0.0.1:1\nMATTERMOST_TOKEN__research-lead=" + "w" * 26 +
                            "\nMATTERMOST_TOKEN__research-reviewer=" + "r" * 26 + "\nRESEARCH_GATEWAY_SECRET=s3\n")
         self.home = self.tmp / "home"
         self.cfg = self.tmp / "service.json"
@@ -37,7 +37,7 @@ class ServiceTests(unittest.TestCase):
             "team_home": str(self.home), "hermes_home": str(self.tmp / "hh"), "python": sys.executable,
             "hermes": "hermes", "board": str(board), "papers_file": str(self.tmp / "papers"),
             "secrets_file": str(secrets), "gateway": None,
-            "runners": [{"role": "research-writer", "slot": 1}, {"role": "research-reviewer", "slot": 1},
+            "runners": [{"role": "research-lead", "slot": 1}, {"role": "research-reviewer", "slot": 1},
                         {"role": "research-reviewer", "slot": 2}]}))
         import team_service_under_test  # noqa: F401
         self.proc = sp.Popen([sys.executable, str(SERVICE), "serve", "--config", str(self.cfg)])
@@ -66,7 +66,7 @@ class ServiceTests(unittest.TestCase):
         return False
 
     def test_runners_started_with_own_token_restarted_and_stopped(self):
-        files = [self.home / f"env-{n}.json" for n in ("research-writer-1", "research-reviewer-1", "research-reviewer-2")]
+        files = [self.home / f"env-{n}.json" for n in ("research-lead-1", "research-reviewer-1", "research-reviewer-2")]
         self.assertTrue(self.wait_for(lambda: all(f.exists() for f in files)))
         w = json.loads(files[0].read_text()); r = json.loads(files[2].read_text())
         self.assertEqual("w" * 26, w["token"]); self.assertEqual("r" * 26, r["token"]); self.assertEqual("s3", w["secret"])
@@ -89,6 +89,11 @@ class ServiceTests(unittest.TestCase):
     def test_coordinator_child_gets_gateway_secret_without_bot_token(self):
         import team_service_under_test as service
         cfg = json.loads(self.cfg.read_text(encoding="utf-8"))
+        cfg["dashboard"] = {"enabled": True, "workspace": str(self.tmp / "workspace")}
+        board = [child for child in service.children(cfg) if child.name == "research-board"][0]
+        self.assertNotIn("MATTERMOST_TOKEN", board.env)
+        self.assertNotIn("RESEARCH_GATEWAY_SECRET", board.env)
+        self.assertIn("--workspace", board.argv)
         cfg["coordinator"] = {"enabled": True, "task_timeout": 1200}
         lead = [child for child in service.children(cfg) if child.name == "lead-coordinator"]
         self.assertEqual(1, len(lead))

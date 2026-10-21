@@ -123,9 +123,9 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
             return & $ok 'stop requested'
         }
         if ($args[0] -ceq '-B' -and $args[1] -like '*team_selftest.py') {
-            if ($null -ne $OutputLineCallback) { & $OutputLineCallback 'StdOut' 'SELFTEST_PROGRESS research-writer: done' }
-            $answer = [ordered]@{ passed = [bool]$script:selftestPassed; live = $true; folder = 'C:\ws\_selftest-1'; ledger_intact = $true; delivered = [bool]$script:selftestPassed; lead = 'done'; error = $(if ($script:selftestPassed) { $null } else { 'roles not done' })
-                roles = [ordered]@{ 'research-librarian' = 'done'; 'research-reviewer' = $(if ($script:selftestPassed) { 'done' } else { 'blocked' }); 'research-writer' = 'done'; 'research-experimenter' = 'done' } }
+            if ($null -ne $OutputLineCallback) { & $OutputLineCallback 'StdOut' 'SELFTEST_PROGRESS research-lead: done' }
+            $answer = [ordered]@{ passed = [bool]$script:selftestPassed; live = $true; folder = 'C:\ws\_selftest-1'; ledger_intact = $true; dashboard_ready = $true; delivered = [bool]$script:selftestPassed; lead = 'done'; error = $(if ($script:selftestPassed) { $null } else { 'roles not done' })
+                roles = [ordered]@{ 'research-librarian' = 'done'; 'research-reviewer' = $(if ($script:selftestPassed) { 'done' } else { 'blocked' }); 'research-lead' = 'done'; 'research-experimenter' = 'done' } }
             return [pscustomobject]@{ Started = $true; TimedOut = $false; ExitCode = $(if ($script:selftestPassed) { 0 } else { 1 }); StdOut = ($answer | ConvertTo-Json -Compress -Depth 4); StdErr = '' }
         }
         throw ('Unexpected real-process boundary: ' + ($args -join ' '))
@@ -145,6 +145,7 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
             $config = Get-ChildItem -LiteralPath $script:fixtureRoot -Recurse -Filter 'service.json' | Sort-Object LastWriteTime | Select-Object -Last 1
             $service = [IO.File]::ReadAllText($config.FullName) | ConvertFrom-Json
             $children = @($service.runners | ForEach-Object { @{ name = ($_.role + '-' + $_.slot); state = 'running' } })
+            if ($service.dashboard.enabled) { $children += @{ name = 'research-board'; state = 'running' } }
             if ($service.coordinator.enabled) { $children += @{ name = 'lead-coordinator'; state = 'running' } }
             if ($null -ne $service.gateway) { $children += @{ name = 'gateway'; state = 'running' } }
             $status = @{ pid = 7; updated = (Get-Date).ToUniversalTime().AddSeconds(2).ToString('o'); gateway = @{ ok = [bool]$script:serviceGatewayOK -or $null -eq $service.gateway; detail = 'fixture' }; children = $children }
@@ -159,12 +160,12 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
         $teamInput = New-Input $paths
         $events = New-Object System.Collections.Generic.List[object]
         $result = Invoke-Setup $paths $teamInput -ProgressCallback { param($event) $events.Add($event) }.GetNewClosure()
-        Assert (@($events | Where-Object { $_.message -ceq 'research-writer: done' }).Count -eq 1) 'Live test streams role status into installer progress'
+        Assert (@($events | Where-Object { $_.message -ceq 'research-lead: done' }).Count -eq 1) 'Live test streams role status into installer progress'
         $research = Join-Path $paths.RuntimeRoot 'research'
-        Assert ($result.Succeeded -and $result.ExecutionReady -and $result.WorkflowTest.Passed -and $result.WorkflowTest.Roles.Count -eq 5) 'Fresh install passes the live five-role test'
+        Assert ($result.Succeeded -and $result.ExecutionReady -and $result.WorkflowTest.Passed -and $result.WorkflowTest.Roles.Count -eq 4) 'Fresh install passes the live four-role test'
         $creates = @($script:processes | Where-Object { $_.Arguments.Count -eq 4 -and $_.Arguments[0] -ceq 'profile' -and $_.Arguments[1] -ceq 'create' })
-        Assert ($creates.Count -eq 5 -and @($creates | Where-Object { $_.Arguments -contains '--clone' -or $_.Arguments -contains '--clone-all' }).Count -eq 0) 'Five profiles are created new, never cloned'
-        foreach ($profile in @('research-lead','research-librarian','research-experimenter','research-reviewer','research-writer')) {
+        Assert ($creates.Count -eq 4 -and @($creates | Where-Object { $_.Arguments -contains '--clone' -or $_.Arguments -contains '--clone-all' }).Count -eq 0) 'Four profiles are created new, never cloned'
+        foreach ($profile in @('research-lead','research-librarian','research-experimenter','research-reviewer')) {
             $dir = Join-Path $paths.HermesHome ('profiles\' + $profile)
             Assert ([IO.File]::ReadAllText((Join-Path $dir '.research-team')).Contains('team=')) "$profile carries the team marker"
             $soul = [IO.File]::ReadAllText((Join-Path $dir 'SOUL.md'))
@@ -186,14 +187,14 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
         $pbLine = @([IO.File]::ReadAllLines((Join-Path $paths.HermesHome 'profiles\research-lead\SOUL.md')) | Where-Object { $_ -like 'PB=(*' })[0]
         Assert ($pbLine -like 'PB=("*/venv/Scripts/python.exe" "*/team/shared/research_board.py")*' -and -not $pbLine.Contains([string][char]92)) 'Board command in the lead SOUL is a quoted forward-slash array for Git Bash'
         $manifest = [IO.File]::ReadAllText((Join-Path $research 'team\shared\profile-manifest.json')) | ConvertFrom-Json
-        Assert (@($manifest.profiles.PSObject.Properties.Name).Count -eq 4 -and $manifest.profiles.'research-writer'.'SOUL.md' -cmatch '^[a-f0-9]{64}$') 'Profile manifest pins each runner profile''s SOUL and skills'
+        Assert (@($manifest.profiles.PSObject.Properties.Name).Count -eq 4 -and $manifest.profiles.'research-lead'.'SOUL.md' -cmatch '^[a-f0-9]{64}$') 'Profile manifest pins each runner profile''s SOUL and skills'
         Assert ([IO.File]::ReadAllText((Join-Path $research 'team\shared\team-home.txt')) -ceq $research) 'Runner records its team home'
         $service = [IO.File]::ReadAllText((Join-Path $research 'service.json')) | ConvertFrom-Json
-        Assert (@($service.runners).Count -eq 5 -and @($service.runners | Where-Object role -ceq 'research-reviewer').Count -eq 2 -and $service.runners[0].task_timeout -eq 10800) 'Service runs librarian, experimenter, writer and two referee slots with the chosen time limit'
+        Assert (@($service.runners).Count -eq 5 -and @($service.runners | Where-Object role -ceq 'research-reviewer').Count -eq 2 -and $service.runners[0].task_timeout -eq 10800) 'Service runs librarian, experimenter, lead and two referee slots with the chosen time limit'
         Assert ($service.coordinator.enabled -and $service.coordinator.task_timeout -eq 1200) 'Service starts the private lead coordinator'
         Assert ($service.gateway.port -eq 18400 -and (Get-Content -Raw -LiteralPath (Join-Path $research 'service.json')) -notmatch 'sk-ant|' + ('a' * 26)) 'Service config names the router and carries no secret'
         $secrets = Read-Env (Join-Path $research 'private\service.env')
-        Assert ($secrets['MATTERMOST_TOKEN__research-writer'] -ceq ('e' * 26) -and -not $secrets.ContainsKey('MATTERMOST_TOKEN__research-lead') -and $secrets['RESEARCH_GATEWAY_SECRET'] -cmatch '^[a-f0-9]{48}$') 'Each runner gets its own bot token; the lead''s stays in its profile'
+        Assert ($secrets['MATTERMOST_TOKEN__research-lead'] -ceq ('a' * 26) -and -not $secrets.ContainsKey('MATTERMOST_TOKEN__research-writer') -and $secrets['RESEARCH_GATEWAY_SECRET'] -cmatch '^[a-f0-9]{48}$') 'Each active runner gets its own bot token; writer is inactive'
         $backupPaths = Get-HermesDefaultPaths -HermesHome $paths.HermesHome -InstallDir $paths.InstallDir -RuntimeRoot $paths.RuntimeRoot
         $backupPrior = [IO.File]::ReadAllText((Join-Path $research 'team.json')) | ConvertFrom-Json
         $backupFixture = Backup-HermesResearchMigration -Paths $backupPaths -Prior $backupPrior -Tasks @()
@@ -208,11 +209,25 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
         Assert ((Test-Path -LiteralPath (Join-Path $paths.Workspace '_template\CLAUDE.md')) -and (Test-Path -LiteralPath (Join-Path $paths.Workspace 'reports\.git')) -and (Test-Path -LiteralPath (Join-Path $paths.Workspace 'reports\.tasks\project.json')) -and (Test-Path -LiteralPath (Join-Path $paths.Workspace '.hermes.md'))) 'Workspace gets _template, team context and the reports board'
         Assert ($result.LocationsPath -ceq (Join-Path $paths.Workspace 'RESEARCH_PATHS.md') -and (Test-Path -LiteralPath $result.LocationsPath -PathType Leaf) -and [IO.File]::ReadAllText((Join-Path $research 'workspace-root.txt'), [Text.Encoding]::UTF8).Trim() -ceq $paths.Workspace) 'Install reports the generated location guide and remembers the workspace'
         $state = [IO.File]::ReadAllText((Join-Path $research 'team.json')) | ConvertFrom-Json
-        Assert ($state.Manager -ceq 'HermesEasySetup.ResearchTeam.v2' -and @($state.Profiles).Count -eq 5 -and ($state | ConvertTo-Json -Depth 8) -notmatch ('a' * 26)) 'Team record has five profiles and no secret'
+        Assert ($state.Manager -ceq 'HermesEasySetup.ResearchTeam.v2' -and @($state.Profiles).Count -eq 4 -and ($state | ConvertTo-Json -Depth 8) -notmatch ('a' * 26)) 'Team record has four profiles and no secret'
 
         # --- Re-running needs the explicit reset choice; with it the same team is updated ---
         Reject { Invoke-Setup $paths $teamInput } 'A second install without reset is refused' '재설정'
+        # A recorded five-role installation must retain the dormant profile/token.
+        $writerDir = Join-Path $paths.HermesHome 'profiles\research-writer'
+        New-Item -ItemType Directory -Path $writerDir -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $writerDir 'SOUL.md'), 'preserved old writer')
+        $state.Profiles += [pscustomobject]@{ ProfileName='research-writer'; OwnsProfile=$true; BotUsername='bot_e'; BotUserID=('e'*26); DisplayName='writer'; Status='Ready' }
+        [IO.File]::WriteAllText((Join-Path $research 'team.json'), ($state | ConvertTo-Json -Depth 8))
+        $savedBots = [IO.File]::ReadAllText((Join-Path $research 'private\bots.json')) | ConvertFrom-Json
+        $savedBots | Add-Member NoteProperty 'research-writer' ('e'*26)
+        [IO.File]::WriteAllText((Join-Path $research 'private\bots.json'), ($savedBots | ConvertTo-Json))
         $again = Invoke-Setup $paths $teamInput -Resume
+        $updatedState = [IO.File]::ReadAllText((Join-Path $research 'team.json')) | ConvertFrom-Json
+        Assert (@($updatedState.Profiles).Count -eq 4 -and @($updatedState.InactiveProfiles).Count -eq 1 -and $updatedState.InactiveProfiles[0].ProfileName -ceq 'research-writer') 'Five-role migration records four active and one inactive profile'
+        Assert ([IO.File]::ReadAllText((Join-Path $writerDir 'SOUL.md')) -ceq 'preserved old writer' -and ([IO.File]::ReadAllText((Join-Path $research 'private\bots.json')) | ConvertFrom-Json).'research-writer' -ceq ('e'*26)) 'Inactive writer profile and token are preserved'
+        Assert ($service.dashboard.enabled -and $service.dashboard.workspace -ceq $paths.Workspace -and @($service.runners | Where-Object role -ceq 'research-writer').Count -eq 0) 'Dashboard is registered and no writer runner starts'
+
         Assert ($again.Succeeded -and @($script:tasks.Keys).Count -eq 2) 'Reset updates the same team and tasks'
         Assert ((Read-Env (Join-Path $research 'gateway\env'))['RESEARCH_GATEWAY_SECRET'] -ceq $secrets['RESEARCH_GATEWAY_SECRET']) 'Router secret survives a reset'
 
@@ -227,7 +242,7 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
         Reject { Invoke-Setup $codexPaths (New-Input $codexPaths -Mode Codex) } 'Codex direct mode needs a Codex login' 'Codex'
         $script:loggedIn = $true
         $codexResult = Invoke-Setup $codexPaths (New-Input $codexPaths -Mode Codex)
-        $writerConfig = [IO.File]::ReadAllText((Join-Path $codexPaths.HermesHome 'profiles\research-writer\config.yaml'))
+        $writerConfig = [IO.File]::ReadAllText((Join-Path $codexPaths.HermesHome 'profiles\research-lead\config.yaml'))
         Assert ($codexResult.Succeeded -and $writerConfig.Contains('provider: openai-codex') -and -not (Test-Path -LiteralPath (Join-Path $codexPaths.RuntimeRoot 'research\gateway\env'))) 'Codex direct mode configures every profile for Codex and installs no router'
         $muxPaths = New-FixturePaths 'mux'
         $script:multiplex = 'on'
@@ -288,18 +303,18 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
         $fiveState.PayloadManifestSha256 = '0' * 64
         [IO.File]::WriteAllText($fiveStatePath, ($fiveState | ConvertTo-Json -Depth 8))
         $fiveInput = New-Input $paths
-        Reject { Invoke-Setup $paths $fiveInput } 'An obsolete five-role team needs explicit beta consent when replacing without reset' '베타'
+        Reject { Invoke-Setup $paths $fiveInput } 'An obsolete four-role team needs explicit beta consent when replacing without reset' '베타'
         $fiveInput.WizardOptions.MigrationConsent = $true
         $beforeBackup = @($script:migrationCalls | Where-Object { $_ -ceq 'backup' }).Count
         $fiveResult = Invoke-Setup $paths $fiveInput
-        Assert ($fiveResult.Succeeded -and $fiveResult.MigrationBackupPath -like '*migrations*' -and @($script:migrationCalls | Where-Object { $_ -ceq 'backup' }).Count -eq ($beforeBackup + 1)) 'Beta replacement of an obsolete five-role team backs up settings before updating'
+        Assert ($fiveResult.Succeeded -and $fiveResult.MigrationBackupPath -like '*migrations*' -and @($script:migrationCalls | Where-Object { $_ -ceq 'backup' }).Count -eq ($beforeBackup + 1)) 'Beta replacement of an obsolete four-role team backs up settings before updating'
         $fiveState = [IO.File]::ReadAllText($fiveStatePath) | ConvertFrom-Json
         $fiveState.PayloadManifestSha256 = '0' * 64
         [IO.File]::WriteAllText($fiveStatePath, ($fiveState | ConvertTo-Json -Depth 8))
         $normalUpdateInput = New-Input $paths
         $beforeBackup = @($script:migrationCalls | Where-Object { $_ -ceq 'backup' }).Count
         $updated = Invoke-Setup $paths $normalUpdateInput -Resume
-        Assert ($updated.Succeeded -and $updated.MigrationBackupPath -like '*migrations*' -and @($script:migrationCalls | Where-Object { $_ -ceq 'backup' }).Count -eq ($beforeBackup + 1)) 'Normal five-role update backs up obsolete configuration without beta consent'
+        Assert ($updated.Succeeded -and $updated.MigrationBackupPath -like '*migrations*' -and @($script:migrationCalls | Where-Object { $_ -ceq 'backup' }).Count -eq ($beforeBackup + 1)) 'Normal four-role update backs up obsolete configuration without beta consent'
         Assert (([IO.File]::ReadAllText($fiveStatePath) | ConvertFrom-Json).InstallerVersion -ceq [IO.File]::ReadAllText((Join-Path $projectRoot 'VERSION')).Trim()) 'Updated team records the installer version'
         foreach ($legacyWindow in @($false,$true)) {
             $partialPaths = New-FixturePaths ('interrupted-' + $legacyWindow)

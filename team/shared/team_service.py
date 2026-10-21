@@ -174,6 +174,12 @@ def children(cfg):
     base.update({"RESEARCH_TEAM_HOME": str(home), "HERMES_HOME": cfg["hermes_home"], "PYTHONUTF8": "1",
                  "PYTHONIOENCODING": "utf-8"})
     out = []
+    dashboard = cfg.get("dashboard") or {}
+    if dashboard.get("enabled"):
+        script = Path(cfg["board"]).with_name("research_dashboard.py")
+        out.append(Child("research-board", [cfg["python"], "-B", str(script),
+                         "--workspace", dashboard["workspace"], "--home", str(home)],
+                         dict(base), str(home), home / "logs" / "research-board.log"))
     gw = cfg.get("gateway")
     if gw:
         genv = dict(base)

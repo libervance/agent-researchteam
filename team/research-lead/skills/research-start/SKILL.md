@@ -1,6 +1,6 @@
 ---
 name: research-start
-description: Takes a CS/AI paper from nothing to a review-ready first draft in this workspace — scaffold the paper folder, pin down venue and the one-sentence contribution against the closest prior art, plan the claims and the experiments that would establish them, outline, then draft section by section through research-writer tasks on the paper's git board. Works whether the user already has results or only an idea. Use when the user wants to start / write / set up a new paper, write up results, turn an idea into a paper, plan experiments for a paper, outline a paper, draft or continue drafting sections, or resume an unfinished first draft. Not for reviewing an existing draft or running a revision round (use research-round), and not for a standalone literature question (one research-librarian task).
+description: Takes a CS/AI paper from nothing to a review-ready first draft in this workspace — scaffold the paper folder, pin down venue and the one-sentence contribution against the closest prior art, plan the claims and the experiments that would establish them, outline, then draft section by section through research-lead tasks on the paper's git board. Works whether the user already has results or only an idea. Use when the user wants to start / write / set up a new paper, write up results, turn an idea into a paper, plan experiments for a paper, outline a paper, draft or continue drafting sections, or resume an unfinished first draft. Not for reviewing an existing draft or running a revision round (use research-round), and not for a standalone literature question (one research-librarian task).
 version: 1.0.0
 metadata:
   hermes:
@@ -17,13 +17,13 @@ Five stages, each ending in a file on disk, so any session can resume from what 
 |---|---|---|
 | 1 Scope | `<paper>/CLAUDE.md` filled, `<paper>/notes/prior-art.md` | you with the user; a `research-librarian` task |
 | 2 Claims and evidence plan | `<paper>/claims.md` rows + experiment plan | you with the user |
-| 3 Outline | `<paper>/outline.md` | a `research-writer` task |
-| 4 Draft | `<paper>/paper/sections/*.tex`, clean build | a chain of `research-writer` board tasks |
+| 3 Outline | `<paper>/outline.md` | a `research-lead` task |
+| 4 Draft | `<paper>/paper/sections/*.tex`, clean build | a chain of `research-lead` board tasks |
 | 5 Handoff | review-ready draft | → `research-round` |
 
 **Execution mode:** mixed. Stages 1–2 are a conversation between you (research-lead) and the
 user — the contribution and the claims are the author's decisions, not a worker's. Stage 1's
-literature search and Stage 3 are single board tasks. Stage 4 is a chain of `research-writer`
+literature search and Stage 3 are single board tasks. Stage 4 is a chain of `research-lead`
 tasks, one per section, each `--after` the previous; the writer reads the earlier sections
 and the previous task's report for voice and notation.
 
@@ -38,7 +38,7 @@ Open one Mattermost thread per stage that creates tasks (`TH=$("${PB[@]}" thread
 likewise Stage 3 and Stage 4) and pass `--thread $TH` to its tasks. Over Mattermost, never wait
 inside a turn: dispatch, reply briefly, end the turn — the runners report into the thread.
 
-You never write under `<paper>/paper/` — the manuscript belongs to `research-writer`. Everything
+In coordinator/chat mode, schedule your authorship as `research-lead` board tasks. Everything
 else in the paper folder (`CLAUDE.md`, `claims.md`, `notes/`) you may write during Stages
 1–2; push it with `"${PB[@]}" publish <paper> -m "<msg>" <paths>` so the other devices see it.
 
@@ -114,12 +114,11 @@ the first one — the headline claim — as soon as the ledger is confirmed; dra
 3–4) proceeds in parallel with `\pending{C<n>}` placeholders.
 
 **Gate:** the user confirms the ledger and plan. Publish `CLAUDE.md`, `claims.md`,
-`REVIEW_RUBRIC.md` and `evidence/`. From here on `research-writer` owns `claims.md`; you stop
-editing it.
+`REVIEW_RUBRIC.md` and `evidence/`. From here on update `claims.md` through your authorship board tasks.
 
 ## Stage 3 — Outline
 
-Create a `research-writer` task, `--id s3-outline --expects outline.md --gate human`:
+Create a `research-lead` task, `--id s3-outline --expects outline.md --gate human`:
 
 > Read `CLAUDE.md`, `claims.md` and `notes/prior-art.md`. Write `outline.md`: the section list with a page
 > budget per section within the venue limit; per section, its paragraphs as one-line claims
@@ -127,20 +126,20 @@ Create a `research-writer` task, `--id s3-outline --expects outline.md --gate hu
 > it will come from (or `pending C<n>`). Do not write LaTeX yet.
 
 Show the user the outline (after `git -C <paper> pull`). **Gate:** the user approves it.
-Edits go back as a new `research-writer` task (`--id s3-outline-rev<k> --gate human`) quoting the user's
-requested changes.
+For revisions, append the user's feedback to `s3-outline` and reset that same task with
+`edit <paper> s3-outline --append <feedback> --status ready`. Its next result needs fresh approval.
 
 ## Stage 4 — Draft
 
 Create the writer task chain below. If the user wants to co-write, collect their feedback
-through your chat and put it in new writer board tasks. Only your chat gateway accepts user
-instructions; the writer bot posts progress but does not receive chat requests.
+through your chat and put it in your authorship board tasks. Your lead gateway accepts user
+instructions; the lead task runner writes the manuscript in the background.
 
 **Order:** method → experiments → related work → introduction → conclusion → abstract. The
 method is what the paper is; the introduction and abstract can only promise what the
 sections before them deliver, so they are written last.
 
-Create one `research-writer` task per section, `--id s4-<section>`, each `--after` the previous
+Create one `research-lead` task per section, `--id s4-<section>`, each `--after` the previous
 section's task. You may create the whole chain at once:
 
 > Draft section **<section>** from `outline.md`. Read the sections already in
@@ -154,10 +153,9 @@ For a claim still `unsupported`, the writer drafts the setup and leaves the resu
 stand in for a run that has not happened.
 
 After each section lands: tell the user in two lines what was drafted and which claims are
-pending. User feedback on a section becomes a new `research-writer` task (`--id
-s4-<section>-rev<k>`, the feedback quoted verbatim) — if later sections are still queued,
-add it to the next one's `after` (`"${PB[@]}" edit <paper> <next> --after <…>,s4-<section>-rev<k>`)
-so the fix lands first. When an experiment's
+pending. For feedback before approval, append it to the same section task and reset it with
+`edit <paper> s4-<section> --append <feedback> --status ready`; keep later sections dependent
+on that task. The revised result requires a fresh approval. When an experiment's
 result lands (`research-experiment` Step 6), its write-up task updates the ledger and fills
 `\pending{C<n>}`. For runs the user did outside the team, create a writer task: "C<n> now
 has `evidence/<run>`; update the ledger and fill `\pending{C<n>}`".

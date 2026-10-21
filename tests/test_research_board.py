@@ -52,7 +52,7 @@ if "REPORT" in prompt:
     Path("notes/report.md").write_text("# 보고서\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n", encoding="utf-8")
 if "TOUCH-PROTOCOL" in prompt:
     Path("experiments/x1/protocol.md").write_text("changed")
-if args[args.index("-p") + 1] == "research-lead" and "LEAD-CAPPED" in prompt:
+if args[args.index("-p") + 1] == "research-lead" and "LEAD-CAPPED" in prompt and "WRITE-PAPER" not in prompt:
     print("lead made a partial plan")
     print("maximum tool-iteration limit was reached")
     sys.exit(0)
@@ -91,6 +91,10 @@ class MockMattermost(http.server.BaseHTTPRequestHandler):
         self._json({}, 404)
 
     def do_GET(self):
+        if self.path == "/api/v4/users/username/me":
+            return self._json({"id": "human", "is_bot": False})
+        if self.path.endswith("/thread"):
+            return self._json({"posts": {p["id"]: p for p in self.posts}})
         fid = self.path.rsplit("/", 1)[-1]
         if fid in self.files:
             data = self.files[fid]
@@ -141,7 +145,7 @@ class Base(unittest.TestCase):
                     # no global git identity, as on a fresh Windows account
                     "GIT_CONFIG_GLOBAL": str(self.tmp / "empty.gitconfig"), "GIT_CONFIG_NOSYSTEM": "1",
                     "RESEARCH_TEAM_MANIFEST": str(self.tmp / "manifest.json")}
-        for role in ("research-writer", "research-reviewer", "research-librarian", "research-experimenter"):
+        for role in ("research-lead", "research-reviewer", "research-librarian", "research-experimenter"):
             (self.hh / "profiles" / role).mkdir(parents=True)
         self.paper = self.ws / "p1"; self.paper.mkdir()
         (self.paper / "CLAUDE.md").write_text("# p1\n**Sensitivity:** public\n", encoding="utf-8")
@@ -162,7 +166,7 @@ class Base(unittest.TestCase):
         return self.board("run", "--role", role, "--once", "--interval", "1", "--hermes", str(self.hermes), *extra)
 
     def task(self, tid, assignee, body, *extra):
-        self.board("new", str(self.paper), "--id", tid, "--assignee", assignee, "--body", body, *extra)
+        self.board("new", str(self.paper), "--id", tid, "--assignee", assignee, "--body", body, "--gate", "auto", *extra)
 
     def state(self, tid):
         git("pull", "-q", cwd=self.paper)
@@ -208,13 +212,13 @@ class BoardTests(Base):
             "WizardOptions": {"HumanUsername": "me"}}), encoding="utf-8")
         self.board("project-create", "p2")
         self.paper = self.ws / "p2"
-        self.task("w1", "research-writer", "WRITE-PAPER", "--expects", "paper/main.tex")
-        self.run_role("research-writer")
+        self.task("w1", "research-lead", "WRITE-PAPER", "--expects", "paper/main.tex")
+        self.run_role("research-lead")
         before = len(MockMattermost.posts)
         self.board("coordinate", "--once", "--hermes", str(self.hermes))
         self.board("coordinate", "--once", "--hermes", str(self.hermes))
-        self.assertEqual(1, len([call for call in self.calls() if call["profile"] == "research-lead"]))
-        self.assertEqual(before, len(MockMattermost.posts))
+        self.assertEqual(2, len([call for call in self.calls() if call["profile"] == "research-lead"]))
+        self.assertEqual(before + 1, len(MockMattermost.posts))
 
     def test_human_gate_notifies_user_without_background_lead_turn(self):
         shutil.copytree(ROOT / "team" / "template", self.ws / "_template")
@@ -224,11 +228,11 @@ class BoardTests(Base):
             "WizardOptions": {"HumanUsername": "me"}}), encoding="utf-8")
         self.board("project-create", "p2")
         self.paper = self.ws / "p2"
-        self.task("w1", "research-writer", "WRITE-PAPER", "--expects", "paper/main.tex", "--gate", "human")
-        self.run_role("research-writer")
+        self.task("w1", "research-lead", "WRITE-PAPER", "--expects", "paper/main.tex", "--gate", "human")
+        self.run_role("research-lead")
         self.board("coordinate", "--once", "--hermes", str(self.hermes))
-        self.assertFalse(any(call["profile"] == "research-lead" for call in self.calls()))
-        self.assertTrue(any("ready for your decision" in post["message"] and "@me" in post["message"]
+        self.assertEqual(1, len(self.calls()))
+        self.assertTrue(any("Your approval is required" in post["message"] and "@me" in post["message"]
                             for post in MockMattermost.posts))
 
     def test_capped_lead_turn_saves_checkpoint_and_requests_human_resume(self):
@@ -239,11 +243,11 @@ class BoardTests(Base):
             "WizardOptions": {"HumanUsername": "me"}}), encoding="utf-8")
         self.board("project-create", "p2")
         self.paper = self.ws / "p2"
-        self.task("LEAD-CAPPED", "research-writer", "WRITE-PAPER", "--expects", "paper/main.tex")
-        self.run_role("research-writer")
+        self.task("LEAD-CAPPED", "research-lead", "WRITE-PAPER", "--expects", "paper/main.tex")
+        self.run_role("research-lead")
         self.board("coordinate", "--once", "--hermes", str(self.hermes))
         self.board("coordinate", "--once", "--hermes", str(self.hermes))
-        self.assertEqual(1, len([call for call in self.calls() if call["profile"] == "research-lead"]))
+        self.assertEqual(2, len([call for call in self.calls() if call["profile"] == "research-lead"]))
         checkpoints = list((self.home / "run" / "lead-attempts").glob("*.json"))
         self.assertEqual(1, len(checkpoints))
         self.assertIn("lead made a partial plan", checkpoints[0].read_text(encoding="utf-8"))
@@ -295,13 +299,13 @@ class BoardTests(Base):
     def test_init_registers_paper_and_runner_reads_papers_file(self):
         papers = (self.home / "papers").read_text(encoding="utf-8").splitlines()
         self.assertEqual([str(self.home / "boards" / "p1.git")], papers)
-        self.task("w1", "research-writer", "WRITE-PAPER", "--expects", "paper/main.tex")
-        self.run_role("research-writer")  # no URLs given: <team home>/papers
+        self.task("w1", "research-lead", "WRITE-PAPER", "--expects", "paper/main.tex")
+        self.run_role("research-lead")  # no URLs given: <team home>/papers
         self.assertIn("status: done", self.state("w1"))
 
     def test_writer_outputs_filtered_ledger_chained_and_secrets_withheld(self):
-        self.task("w1", "research-writer", "WRITE-PAPER", "--expects", "paper/main.tex")
-        self.run_role("research-writer")
+        self.task("w1", "research-lead", "WRITE-PAPER", "--expects", "paper/main.tex")
+        self.run_role("research-lead")
         git("pull", "-q", cwd=self.paper)
         files = git("ls-files", cwd=self.paper).split("\n")
         self.assertIn("paper/main.tex", files)
@@ -317,8 +321,8 @@ class BoardTests(Base):
         self.assertIn("ledger intact: 1", self.board("ledger", str(self.paper), "--verify").stdout)
 
     def test_capped_task_preserves_partial_work_then_resumes_once(self):
-        self.task("w1", "research-writer", "CAPPED-DONE WRITE-PAPER", "--expects", "paper/main.tex")
-        self.run_role("research-writer")
+        self.task("w1", "research-lead", "CAPPED-DONE WRITE-PAPER", "--expects", "paper/main.tex")
+        self.run_role("research-lead")
         self.assertIn("status: done", self.state("w1"))
         self.assertEqual(2, len(self.calls()))
         self.assertTrue(all(call["max_turns"] == "80" for call in self.calls()))
@@ -335,32 +339,32 @@ class BoardTests(Base):
         self.assertEqual(1, len(self.calls()))
 
     def test_bot_notice_does_not_mention_another_bot(self):
-        self.task("w1", "research-writer", "WRITE-PAPER", "--notify-done", "Tell @research-lead to continue")
-        self.run_role("research-writer")
+        self.task("w1", "research-lead", "WRITE-PAPER", "--notify-done", "Tell @research-lead to continue")
+        self.run_role("research-lead")
         messages = [p["message"] for p in MockMattermost.posts]
         self.assertFalse(any("@research-lead" in message for message in messages))
         self.assertTrue(any("@me" in message for message in messages))
 
     def test_ledger_rewrite_is_detected_and_reported(self):
         for tid in ("w1", "w2"):
-            self.task(tid, "research-writer", "WRITE-PAPER")
-            self.run_role("research-writer")
+            self.task(tid, "research-lead", "WRITE-PAPER")
+            self.run_role("research-lead")
         git("pull", "-q", cwd=self.paper)
         led = self.paper / ".tasks/ledger.jsonl"
         lines = led.read_text(encoding="utf-8").splitlines()
         lines[0] = lines[0].replace('"done"', '"failed"')  # rewrite an earlier entry
         led.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        self.task("w3", "research-writer", "WRITE-PAPER")
+        self.task("w3", "research-lead", "WRITE-PAPER")
         git("add", "-A", cwd=self.paper); git("commit", "-qm", "tamper", cwd=self.paper); git("push", "-q", cwd=self.paper)
         self.assertNotEqual(0, self.board("ledger", str(self.paper), "--verify", check=False).returncode)
-        self.run_role("research-writer")
+        self.run_role("research-lead")
         self.assertTrue(any("ledger was rewritten" in p["message"] for p in MockMattermost.posts))
         # the break is now on record, so later tasks do not warn again
         self.assertEqual(0, self.board("ledger", str(self.paper), "--verify", check=False).returncode)
 
     def test_blind_reviewer_sees_snapshot_cannot_edit_paper_and_checkpoint_names_commit(self):
-        self.task("w1", "research-writer", "WRITE-PAPER")
-        self.run_role("research-writer")
+        self.task("w1", "research-lead", "WRITE-PAPER")
+        self.run_role("research-lead")
         self.task("r1", "research-reviewer", "REVIEW", "--expects", "reviews/round-1/meta.md", "--after", "w1")
         self.run_role("research-reviewer")
         call = [c for c in self.calls() if c["profile"] == "research-reviewer"][0]
@@ -373,20 +377,20 @@ class BoardTests(Base):
                             for p in MockMattermost.posts))
 
     def test_drifted_profile_blocks_task(self):
-        soul = self.hh / "profiles/research-writer/SOUL.md"; soul.write_text("original", encoding="utf-8")
-        (self.tmp / "manifest.json").write_text(json.dumps({"profiles": {"research-writer": {
+        soul = self.hh / "profiles/research-lead/SOUL.md"; soul.write_text("original", encoding="utf-8")
+        (self.tmp / "manifest.json").write_text(json.dumps({"profiles": {"research-lead": {
             "SOUL.md": hashlib.sha256(b"original").hexdigest()}}}), encoding="utf-8")
         soul.write_text("tampered", encoding="utf-8")
-        self.task("w1", "research-writer", "WRITE-PAPER")
-        self.run_role("research-writer")
+        self.task("w1", "research-lead", "WRITE-PAPER")
+        self.run_role("research-lead")
         self.assertIn("status: blocked", self.state("w1")); self.assertIn("differs from the install", self.state("w1"))
         self.assertEqual([], self.calls())
 
     def test_private_paper_refused_without_gateway(self):
         (self.paper / "CLAUDE.md").write_text("**Sensitivity:** private\n", encoding="utf-8")
         self.board("publish", str(self.paper), "-m", "private", "CLAUDE.md")
-        self.task("w1", "research-writer", "WRITE-PAPER")
-        self.run_role("research-writer")
+        self.task("w1", "research-lead", "WRITE-PAPER")
+        self.run_role("research-lead")
         self.assertIn("status: blocked", self.state("w1")); self.assertEqual([], self.calls())
 
     def test_frozen_protocol_restored_and_task_failed(self):
@@ -402,9 +406,9 @@ class BoardTests(Base):
     def test_long_prompt_passed_as_file_and_role_skills_preloaded(self):
         prompt = self.ws / "long-prompt.md"
         prompt.write_text("WRITE-PAPER " + "x" * 40000, encoding="utf-8")
-        self.board("new", str(self.paper), "--id", "w1", "--assignee", "research-writer",
+        self.board("new", str(self.paper), "--id", "w1", "--assignee", "research-lead",
                    "--body-file", str(prompt), "--skills", "presubmission")
-        self.run_role("research-writer")
+        self.run_role("research-lead")
         self.assertIn("status: done", self.state("w1"))
         self.assertGreater(self.calls()[0]["len"], 40000)
         self.assertEqual(["manuscript-check", "presubmission"], self.calls()[0]["skills"])
@@ -433,7 +437,7 @@ class BoardTests(Base):
         self.assertNotEqual(0, self.board("deliver", str(self.paper), "notes/r/report.md", check=False).returncode)
 
     def test_bad_deliver_spec_rejected(self):
-        r = self.board("new", str(self.paper), "--id", "x", "--assignee", "research-writer", "--body", "b",
+        r = self.board("new", str(self.paper), "--id", "x", "--assignee", "research-lead", "--body", "b",
                        "--deliver", "paper/main.pdf:docx", check=False)
         self.assertNotEqual(0, r.returncode)
 
@@ -453,11 +457,11 @@ class RetryTests(Base):
         os.environ.update({k: v for k, v in self.env.items() if k in ("STUB_LOG", "HERMES_HOME")})
         rb.TEAM_HOME = self.home
         rb.MANIFEST = self.tmp / "manifest.json"
-        self.task("w1", "research-writer", "FLAKY WRITE-PAPER")
+        self.task("w1", "research-lead", "FLAKY WRITE-PAPER")
         clone = self.tmp / "clone"; git("clone", "-q", str(self.home / "boards/p1.git"), str(clone))
-        rb.git_identity(clone, "research-writer")
+        rb.git_identity(clone, "research-lead")
         p = clone / ".tasks/w1.md"
-        args = type("A", (), dict(role="research-writer", profile=None, hermes=str(self.hermes), yolo=False,
+        args = type("A", (), dict(role="research-lead", profile=None, hermes=str(self.hermes), yolo=False,
                                   heartbeat=600, task_timeout=600))()
         self.assertTrue(rb.claim(clone, p, "me"))
         rb.execute(args, clone, p, "me")

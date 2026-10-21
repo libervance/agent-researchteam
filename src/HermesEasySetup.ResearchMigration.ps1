@@ -252,14 +252,14 @@ function Invoke-HermesResearchSelfTest {
         if ([string]::IsNullOrWhiteSpace($result.StdOut)) { throw 'Self-test returned no JSON result.' }
         $answer = $result.StdOut.Trim().Split("`n")[-1] | ConvertFrom-Json -ErrorAction Stop
         if ($null -eq $answer -or $answer -isnot [pscustomobject]) { throw 'Self-test result must be a JSON object.' }
-        foreach ($field in @('passed','live','ledger_intact','delivered')) {
+        foreach ($field in @('passed','live','ledger_intact','delivered','dashboard_ready')) {
             if (-not $answer.PSObject.Properties[$field] -or $answer.$field -isnot [bool]) { throw "Invalid self-test field: $field" }
         }
         foreach ($field in @('folder','roles','lead','error')) {
             if (-not $answer.PSObject.Properties[$field]) { throw "Missing self-test field: $field" }
         }
         if ($answer.folder -isnot [string] -or $answer.roles -isnot [pscustomobject]) { throw 'Invalid self-test folder or roles.' }
-        foreach ($role in @('research-librarian','research-reviewer','research-writer','research-experimenter')) {
+        foreach ($role in @('research-librarian','research-reviewer','research-lead','research-experimenter')) {
             if (-not $answer.roles.PSObject.Properties[$role] -or $answer.roles.$role -isnot [string]) { throw "Missing self-test role: $role" }
         }
     } catch {
@@ -280,10 +280,10 @@ function Invoke-HermesResearchSelfTest {
         if ([string]$answer.lead -ceq 'done') { $done += 'research-lead' }
         $test.Live = ($answer.live -eq $true)
         $test.RequestID = [IO.Path]::GetFileName([string]$answer.folder)
-        $test.Roles = @($done | Sort-Object)
+        $test.Roles = @($done | Sort-Object -Unique)
         $test.AuditPassed = ([string]$answer.roles.'research-reviewer' -ceq 'done')
         $test.Detail = Get-HermesResearchSelfTestDiagnostic -Text ([string]$answer.error) -Environment $Environment
-        if ($result.ExitCode -eq 0 -and $test.Live -and $answer.passed -eq $true -and $answer.ledger_intact -eq $true -and $answer.delivered -eq $true -and $test.Roles.Count -eq 5) {
+        if ($result.ExitCode -eq 0 -and $test.Live -and $answer.passed -eq $true -and $answer.ledger_intact -eq $true -and $answer.delivered -eq $true -and $answer.dashboard_ready -eq $true -and [string]$answer.lead -ceq 'done' -and @($answer.roles.PSObject.Properties | Where-Object { $_.Value -cne 'done' }).Count -eq 0 -and $test.Roles.Count -eq 4) {
             $test.Passed = $true; $test.ErrorCode = ''
         } else { $test.ErrorCode = 'LiveTestFailed' }
     } catch {
