@@ -116,7 +116,7 @@ function Refresh-ResearchButtons {
     $ui.TeamApplyButton.IsEnabled = $idle -and $ui.TeamTab.IsEnabled -and $modelReady -and $ui.TeamConsent.IsChecked -eq $true -and $ui.ModelEgressConsent.IsChecked -eq $true -and $ui.PublicWebConsent.IsChecked -eq $true
     $ui.SelectedModelSummary.Text = $(if ($null -ne $ui.ModelCombo.SelectedItem -and $script:authenticated) { 'Codex 모델: ' + [string]$ui.ModelCombo.SelectedItem + ' (네 역할 공통)' } else { 'Codex 모델: 2단계에서 로그인하면 선택할 수 있습니다.' })
     $ui.TeamOpenButton.IsEnabled = $idle -and $script:serverReady
-    $ui.TeamBoardButton.IsEnabled = $idle -and (Test-Path -LiteralPath (Join-Path $script:paths.RuntimeRoot 'research\dashboard.json'))
+    $ui.TeamBoardButton.IsEnabled = (Test-Path -LiteralPath (Join-Path $script:paths.RuntimeRoot 'research\dashboard.json'))
     foreach ($agent in $script:agents) {
         $agent.Name.IsEnabled = $idle
         $agent.Status.Text = $(if ([string]::IsNullOrWhiteSpace($agent.Token.Password)) { '설치 시 자동 준비' } elseif ($agent.ChannelJoined) { '연결 정보 준비됨' } else { '토큰 준비됨 · 채널 참여 대기' })
@@ -431,6 +431,7 @@ function Read-ResearchWorkerLine {
             if ($event.PSObject.Properties['message']) { Add-ResearchLog ([string]$event.message) }
         }
         if ($event.PSObject.Properties['percent']) { $ui.Progress.Value = [math]::Min(100,[math]::Max(0,[double]$event.percent)) }
+        $ui.TeamBoardButton.IsEnabled = (Test-Path -LiteralPath (Join-Path $script:paths.RuntimeRoot 'research\dashboard.json'))
         if ([string]$event.type -ceq 'error') { $script:workerFailed = $true }
         if ([string]$event.type -ceq 'complete' -and $event.PSObject.Properties['data']) { $script:workerResult = $event.data }
     } elseif (@('AdminPreflight','DockerStatus','Plan','CodexStatus') -contains $script:workerAction) { $script:workerResult = $event }
@@ -832,7 +833,19 @@ $ui.TeamBoardButton.Add_Click({
     try {
         $record = Get-Content -LiteralPath (Join-Path $script:paths.RuntimeRoot 'research\dashboard.json') -Raw | ConvertFrom-Json
         if ([string]$record.url -cnotmatch '^http://127\.0\.0\.1:[0-9]+/$') { throw '연구 보드 주소가 올바르지 않습니다.' }
-        Start-Process ([string]$record.url) | Out-Null
+        $boardUrl = [string]$record.url + '?view=checks'
+        foreach ($checkFile in @('installation-check.json','live-test.json')) {
+            $checkPath = Join-Path $script:paths.RuntimeRoot ('research\' + $checkFile)
+            if (Test-Path -LiteralPath $checkPath) {
+                $check = Get-Content -LiteralPath $checkPath -Raw | ConvertFrom-Json
+                $project = [IO.Path]::GetFileName([string]$check.folder)
+                if ($project -cmatch '^_selftest-\d{8}-\d{6}$') {
+                    $boardUrl += '&project=' + [Uri]::EscapeDataString($project)
+                    break
+                }
+            }
+        }
+        Start-Process $boardUrl | Out-Null
     } catch { Add-ResearchLog '연구 보드를 열 수 없습니다. 연구팀 서비스를 시작하거나 업데이트를 완료하세요.' }
 })
 $ui.TeamApplyButton.Add_Click({

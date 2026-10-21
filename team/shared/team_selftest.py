@@ -46,13 +46,13 @@ TASKS = [
      "Installation check (keep it short). Use the arXiv API to find one real paper on "
      "retrieval-augmented generation. Write `notes/selftest/sources.md` with exactly one line: "
      "authors, title, year, and its arXiv ID."),
-    ("t-reviewer", "research-reviewer", "reviews/selftest/check.md", "t-librarian", "reviews/selftest/check.md",
+    ("t-reviewer", "research-reviewer", "reviews/selftest/check.md", "t-librarian", "",
      "Installation check (keep it short). Open the arXiv page of the paper in "
      "`notes/selftest/sources.md` and check that the title and year match. Write "
      "`reviews/selftest/check.md` with `Verdict: pass` if they match, else `Verdict: revise` and why."),
     ("t-author", "research-lead", "paper/sections/selftest.tex", "", "",
      "Installation check (keep it short; no build needed). Write `paper/sections/selftest.tex` "
-     "containing one LaTeX sentence that says this team was installed successfully."),
+     "containing one LaTeX sentence that says this is a writing check. Do not claim installation has passed."),
     ("t-experimenter", "research-experimenter", "evidence/selftest/env.json", "", "",
      "Installation check (keep it short; no protocol, no jobs). Using your terminal, run "
      "`git --version`, and write `evidence/selftest/env.json` with keys `git` (its output) and "
@@ -93,6 +93,8 @@ def runner_errors(folder, home):
 def terminal_failure(folder):
     for tid, (_, meta, _) in rb.tasks(folder).items():
         status = meta.get("status")
+        if rb.can_resume(meta, status, meta.get("stop_reason", ""), installation=True):
+            continue  # the runner publishes the failed attempt before requeuing it
         if status in ("blocked", "failed") or (status == "partial" and
                 (meta.get("resume_policy") != "auto" or
                  int(meta.get("attempt") or 0) >= int(meta.get("max_attempts") or 1))):
@@ -104,6 +106,19 @@ def progress(message):
     print("SELFTEST_PROGRESS " + message, flush=True)
 
 
+def save_check(result, phase, outcome="running"):
+    """Persist each phase separately from installer evidence, including abrupt exits."""
+    record = {**result, "phase": phase, "outcome": outcome, "updated": rb.now()}
+    directory = rb.TEAM_HOME / "checks"
+    directory.mkdir(parents=True, exist_ok=True)
+    rb.write_state(directory / (Path(result["folder"]).name + ".json"), record)
+    rb.write_state(rb.TEAM_HOME / "installation-check.json", record)
+
+
+STATUS_KO = {"ready": "대기", "running": "진행 중", "done": "완료", "failed": "재시도 또는 원인 확인 중",
+             "partial": "저장된 결과에서 이어서 확인 중", "blocked": "진행 불가", "missing": "준비 중"}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--workspace", required=True); ap.add_argument("--channel", required=True)
@@ -113,18 +128,29 @@ def main():
     ws = Path(a.workspace)
     folder = ws / time.strftime("_selftest-%Y%m%d-%H%M%S")
     result = {"passed": False, "live": True, "folder": str(folder), "roles": {}, "lead": None,
-              "delivered": False, "ledger_intact": False, "dashboard_ready": False, "thread": None, "error": None}
+              "delivered": False, "ledger_intact": False, "dashboard_ready": False, "review_passed": False, "thread": None, "error": None}
+    note = None
+    def phase(message):
+        progress(message)
+        save_check(result, message)
+        if note and result["thread"]:
+            note.progress("installation-summary", message + "\n[이번 설치 확인 보드](" + rb.dashboard_url(folder) + ")", result["thread"])
     try:
+        save_check(result, "네 역할의 확인 작업을 준비하고 있습니다.")
         for d in ("notes", "reviews", "paper/sections", "evidence"):
             (folder / d).mkdir(parents=True, exist_ok=True)
             (folder / d / ".gitkeep").write_text("", encoding="utf-8")
         (folder / "CLAUDE.md").write_text(CLAUDE, encoding="utf-8", newline="\n")
         board("init", str(folder), cwd=ws)
         board("setup", str(folder), "--channel", a.channel, *(["--mention", a.mention] if a.mention else []), cwd=ws)
-        thread = board("thread", str(folder), "설치 확인 — 네 역할 실제 작업 테스트 / installation check", cwd=ws).stdout.split()[0]
+        thread = board("thread", str(folder), "연구팀 설치 확인을 시작합니다. 문헌 검색·원고 작성·실행 환경·독립 심사를 확인한 뒤, 총괄의 보드 조회와 결과 전달까지 검증합니다.\n"
+                       "자동 재시도 중에는 사용자 조치가 필요하지 않습니다. 최종 통과 여부는 별도로 알려드리겠습니다.\n"
+                       "[이번 설치 확인 보드](" + rb.dashboard_url(folder) + ")", cwd=ws).stdout.split()[0]
         result["thread"] = thread
+        note = rb.Notifier(folder, "research-lead")
         for tid, role, expects, after, deliver, body in TASKS:
-            args = ["new", str(folder), "--id", tid, "--assignee", role, "--expects", expects, "--thread", thread, "--body", body, "--gate", "auto"]
+            args = ["new", str(folder), "--id", tid, "--assignee", role, "--expects", expects, "--thread", thread, "--body", body,
+                    "--gate", "auto", "--resume-policy", "auto", "--max-attempts", "2"]
             args += ["--after", after] if after else []
             args += ["--deliver", deliver] if deliver else []
             board(*args, cwd=ws)
@@ -134,7 +160,7 @@ def main():
             st = status_of(folder, ws)
             result["roles"] = {role: st.get(tid, "missing") for tid, role, *_ in TASKS}
             if result["roles"] != previous:
-                progress("; ".join(f"{role}: {status}" for role, status in result["roles"].items()))
+                phase(" · ".join(f"{rb.CHECK_LABELS[tid]}: {STATUS_KO.get(st.get(tid, 'missing'), '확인 중')}" for tid, *_ in TASKS))
                 previous = dict(result["roles"])
             failure = terminal_failure(folder)
             if failure:
@@ -149,25 +175,27 @@ def main():
             bad = {r: s for r, s in result["roles"].items() if s != "done"}
             raise RuntimeError(f"roles not done: {bad}" + (" (timed out)" if time.time() > deadline else ""))
         # The lead: its own profile, its skill placeholders and its terminal, one question.
-        progress("Four worker results saved. Checking research-lead (up to 15 minutes).")
+        result["review_passed"] = bool(rb.re.search(r"^\s*Verdict:\s*pass\s*$", (folder / "reviews/selftest/check.md").read_text(encoding="utf-8"), rb.re.M | rb.re.I))
+        if not result["review_passed"]:
+            raise RuntimeError("독립 심사에서 서지 정보가 확인되지 않았습니다. 심사 결과를 확인하세요.")
+        phase("네 역할의 결과 저장과 독립 심사가 끝났습니다. 아직 설치 통과 전입니다. 총괄이 보드를 조회할 수 있는지 확인합니다(최대 15분).")
         q = folder.parent / ".scratch" / "selftest-lead.md"
         q.parent.mkdir(exist_ok=True)
         q.write_text(f"Installation check. Using your board command, list the tasks of `{folder.name}` and "
                      "reply with one line: how many tasks are done. End with `STATUS: done`.", encoding="utf-8")
         r = sp.run([a.hermes, "-p", "research-lead", "chat", "-Q", "--query-file", str(q)], cwd=ws,
                    capture_output=True, encoding="utf-8", errors="replace", timeout=900)
-        result["lead"] = "done" if r.returncode == 0 and "STATUS: done" in r.stdout and "4" in r.stdout else \
+        result["lead"] = "done" if r.returncode == 0 and rb.completion_marker(r.stdout)[0] == "done" and "4" in r.stdout else \
             f"failed (exit {r.returncode}): {(r.stdout + r.stderr).strip()[-300:]}"
         if result["lead"] != "done":
             raise RuntimeError(f"research-lead: {result['lead']}")
-        progress("Checking the completion ledger and Mattermost attachment delivery.")
+        phase("총괄의 보드 조회를 확인했습니다. 작업 기록과 Mattermost 첨부 파일이 저장된 결과와 일치하는지 확인합니다.")
         result["ledger_intact"] = board("ledger", str(folder), "--verify", cwd=ws, check=False).returncode == 0
-        # The reviewer's runner already attached its note; deliver it once more as the lead and
-        # require the verified round trip here, where the result is visible.
+        # Deliver once, as the lead; download and verify the uploaded bytes.
         dl = board("deliver", str(folder), "reviews/selftest/check.md", "--thread", thread,
-                   "--label", "설치 확인 결과 / installation check", cwd=ws, check=False)
+                   "--label", "설치 확인의 독립 심사 결과", cwd=ws, check=False)
         result["delivered"] = dl.returncode == 0
-        progress("Checking the graphical research board.")
+        phase("설치 확인 보드에 네 역할의 완료 결과가 표시되는지 확인합니다.")
         dashboard = json.loads((rb.TEAM_HOME / "dashboard.json").read_text(encoding="utf-8"))
         url = dashboard.get("url", "")
         if not rb.re.fullmatch(r"http://127\.0\.0\.1:[0-9]+/", url):
@@ -183,6 +211,13 @@ def main():
                                f"delivery failed: {dl.stdout.strip()[-300:]}")
     except Exception as e:
         result["error"] = str(e)[:800]
+    message = ("설치 확인을 통과했습니다. 네 역할의 작업, 독립 심사, 총괄의 보드 조회, 작업 기록, 결과 전달을 모두 확인했습니다."
+               if result["passed"] else "설치 확인을 완료하지 못했습니다. 작업 결과와 실패 원인은 이번 설치 확인 보드에 보존했습니다. "
+               "일부 작업이 나중에 완료되더라도 설치 통과를 뜻하지는 않습니다. 원인을 확인한 뒤 설치기에서 같은 연구팀으로 다시 시도하세요.")
+    save_check(result, message, "passed" if result["passed"] else "incomplete")
+    progress(message)
+    if note and result["thread"]:
+        note.progress("installation-summary", message + "\n[이번 설치 확인 보드](" + rb.dashboard_url(folder) + ")", result["thread"])
     print(json.dumps(result, ensure_ascii=False))
     sys.exit(0 if result["passed"] else 1)
 

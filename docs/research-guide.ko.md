@@ -193,3 +193,12 @@ Windows 로그인 시 두 예약 작업이 자동 실행됩니다.
 예시: `@research-lead Start a project named <name> on <topic>. First propose the scope, closest prior work, research gaps and a feasible plan. Initialize the research board and show me where to open it.`
 
 현재 설치를 갱신하려면 기존 **Hermes-Installer** 폴더의 시작 파일을 실행하고 저장된 설정으로 **연구팀 업데이트·실제 작업 테스트**를 누르세요. 업데이트를 실행하기 전에는 기존 팀이 계속 동작합니다.
+
+
+## 0.15.1 설치 확인 화면 읽기
+
+- 설치기의 「연구 보드 열기」는 현재 또는 최근 설치 확인을 바로 선택합니다. 설치 중에도 열 수 있습니다.
+- **Research projects**는 실제 연구, **Installation checks · 설치 확인**은 설치 검증입니다. `reports`의 0개 작업은 설치 검증 실패나 성공을 의미하지 않습니다.
+- 네 역할이 모두 완료되어도 위쪽 상태가 「설치 확인 통과」가 될 때까지 최종 검증은 끝난 것이 아닙니다. 중단된 이전 검증은 미완료로 남습니다.
+- 한국어 총괄 안내에서 자동 재시도 중이라고 하면 기다리세요. 최대 두 번 시도하며, 사용자 조치가 필요한 실패는 보드에 원인과 결과를 남깁니다.
+- 이 갱신은 기존 봇과 토큰을 재사용합니다. 같은 `Hermes-Installer` 폴더에서 0.15.1 설치기를 열고 연구팀 업데이트를 실행하세요. 창을 열기만 해서는 실행 중인 서비스가 갱신되지 않습니다.

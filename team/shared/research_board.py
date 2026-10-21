@@ -669,12 +669,14 @@ class Notifier:
             print(f"[{now()}] mattermost: {e}", file=sys.stderr, flush=True)
             return None
 
-    def progress(self, task_id, text, thread=""):
+    def progress(self, task_id, text, thread="", existing_only=False):
         """Keep routine progress in one editable post per task on this device."""
         if not (self.creds and self.channel):
             return None
         key = hashlib.sha256(f"{self.channel}/{thread}/{task_id}".encode()).hexdigest()
         path = TEAM_HOME / "run" / "progress" / f"{key}.json"
+        if existing_only and not path.is_file():
+            return None
         safe = re.sub(r"@(?=[A-Za-z0-9_-])", "@\u200b", text)
         if path.is_file():
             try:
@@ -698,7 +700,7 @@ class Notifier:
             fid = mm_upload(self.creds, self.channel, name, data, mime)
             if hashlib.sha256(mm_download(self.creds, fid)).hexdigest() != digest:
                 return False, "the downloaded copy does not match (SHA-256)"
-            if not self.post(f":page_facing_up: {label} — sha256 `{digest[:16]}…`, verified after upload", thread, file_ids=[fid]):
+            if not self.post(f":page_facing_up: {label}\n첨부 파일이 저장된 결과와 일치하는지 확인했습니다.", thread, file_ids=[fid]):
                 return False, "uploaded and verified, but the post failed"
             return True, digest
         except Exception as e:
@@ -709,6 +711,59 @@ def headline(report, limit=600):
     lines = [l.strip() for l in report.splitlines() if l.strip() and not re.match(r"^\W*STATUS:", l.strip(), re.I)]
     text = " · ".join(lines[:4])
     return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def completion_marker(output):
+    """Accept a final inline marker as well as the documented standalone marker.
+
+    A quoted example in the middle of prose must not count as completion. Exit code,
+    expected outputs, frozen files and execution limits are checked separately.
+    """
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if not lines:
+        return None, ""
+    last = lines[-1].strip("`* ")
+    match = re.search(r"(?:^|\s)[`*]*STATUS:\s*[`*]*(done|blocked)\b(.*)$", last, re.I)
+    if not match:
+        return None, ""
+    status, tail = match.group(1).lower(), match.group(2).strip("`* .—-:")
+    if status == "done" and tail:
+        return None, ""
+    return status, tail
+
+
+def project_name(repo):
+    remote = git(repo, "remote", "get-url", "origin", check=False).stdout.strip()
+    return repo_name(remote) if remote else Path(repo).name
+
+
+def installation_check(repo):
+    return bool(re.fullmatch(r"_selftest-\d{8}-\d{6}", project_name(repo)))
+
+
+def can_resume(meta, status, reason="", installation=False):
+    if meta.get("resume_policy") != "auto" or int(meta.get("attempt") or 1) >= int(meta.get("max_attempts") or 1):
+        return False
+    # Failed installation probes have no experiment jobs or external writes. Never
+    # extend this retry policy to real failed experiments or safety refusals.
+    return status == "partial" or (installation and status == "failed" and reason.startswith("exit "))
+
+
+def dashboard_url(repo):
+    try:
+        url = json.loads(rd(TEAM_HOME / "dashboard.json"))["url"]
+        if re.fullmatch(r"http://127\.0\.0\.1:[0-9]+/", url):
+            return url + "?" + urllib.parse.urlencode({"view": "checks" if installation_check(repo) else "research", "project": project_name(repo)})
+    except (OSError, ValueError, KeyError):
+        pass
+    return ""
+
+
+CHECK_LABELS = {"t-librarian": "문헌 검색", "t-reviewer": "독립 심사", "t-author": "원고 작성", "t-experimenter": "실행 환경"}
+CHECK_DONE = {"t-librarian": "논문 한 편을 찾아 서지 정보를 저장했습니다. 독립 심사가 이어집니다.",
+              "t-reviewer": "서지 정보의 대조 결과를 저장했습니다. 설치기가 심사 판정을 확인합니다.",
+              "t-author": "LaTeX 원고 예제를 저장했습니다. 이 확인에서는 PDF를 만들지 않습니다.",
+              "t-experimenter": "Git 실행 결과와 확인 시각을 저장했습니다."}
 
 
 def checkpoint(meta_md):
@@ -1275,7 +1330,7 @@ def run_agent(a, cmd, work, env, note, tid, role, thread):
                 kill_tree(proc)
                 out, err = proc.communicate()
                 return out, (err or "") + f"\ntimed out after {a.task_timeout}s", 124
-            note.progress(tid, f":hourglass: **{tid}** still running ({fmt_age(time.time() - t0)}) — {role}", thread)
+            print(f"[{now()}] {tid}: still running ({fmt_age(time.time() - t0)})", flush=True)
 
 
 def deliveries(meta, src, base, items=None):
@@ -1307,6 +1362,7 @@ def execute(a, clone, p, me):
     profile = a.profile or role
     thread = meta.get("thread", "")
     note = Notifier(clone, profile)
+    is_check = installation_check(clone)
     base = git(clone, "rev-parse", "HEAD").stdout.strip()
     work = snapshot(clone) if role in BLIND else clone
     if TEAM_CONTEXT.exists():
@@ -1354,12 +1410,13 @@ def execute(a, clone, p, me):
     else:
         for retry_index in range(len(RETRY_DELAYS) + 1):
             out, err, code = run_agent(a, cmd, work, env, note, tid, role, thread)
-            said = re.search(r"^\W*STATUS:\s*(done|blocked)\b", out, re.M | re.I)
+            said = completion_marker(out)[0]
             if code in (0, 124) or said or retry_index == len(RETRY_DELAYS) or not TRANSIENT.search((err or "")[-4000:] + out[-2000:]):
                 break
             wait = RETRY_DELAYS[retry_index]
-            note.progress(tid, f":repeat: **{tid}** hit a transient model error (exit {code}); retrying in {wait}s"
-                          f" ({retry_index + 1}/{len(RETRY_DELAYS)})", thread)
+            Notifier(clone, "research-lead").progress("retry-" + tid,
+                (f"{CHECK_LABELS.get(tid, '설치')} 확인 중 모델 연결이 잠시 불안정합니다. {wait}초 뒤 자동으로 다시 시도합니다. 사용자가 조치할 필요는 없습니다."
+                 if is_check else f"The model connection was interrupted during {tid}. Retrying automatically in {wait} seconds; no action is needed."), thread)
             print(f"[{now()}] {tid}: transient failure (exit {code}); retry in {wait}s", flush=True)
             time.sleep(wait)
             if work == clone:
@@ -1369,8 +1426,7 @@ def execute(a, clone, p, me):
     qfile.unlink(missing_ok=True)
     touched = guard_frozen(clone) if work == clone else []
 
-    marks = re.findall(r"^\W*STATUS:\s*(done|blocked)\b\W*(.*)$", out, re.M | re.I)
-    said, reason = (marks[-1][0].lower(), marks[-1][1].strip()) if marks else (None, "")
+    said, reason = completion_marker(out)
     missing = [e for e in csv(meta.get("expects")) if not (work / e).exists()]
     limit_hit = code == 124 or bool(ITERATION_LIMIT.search((out or "")[-4000:] + (err or "")[-4000:]))
     if limit_hit:
@@ -1402,7 +1458,7 @@ def execute(a, clone, p, me):
         report += "\n\nstderr (tail):\n" + err.strip()[-3000:]
     body = (body.rstrip() + f"\n\n## Result — {status} ({me}, {now()}, at commit {base[:12]})\n\n"
             + (f"**{reason}**\n\n" if reason else "") + report + "\n")
-    meta.update(status=status, stop_reason=reason if status == "partial" else "", base=base, updated=now())
+    meta.update(status=status, stop_reason=reason if status != "done" else "", base=base, updated=now())
     save(p, meta, body)
     rel_task = p.relative_to(clone).as_posix()
     attempt_file = clone / TASKS / "attempts" / tid / f"{attempt_num}.json"
@@ -1425,28 +1481,29 @@ def execute(a, clone, p, me):
                   f"recorded the break and continued. Check `git log -p {LEDGER}`.", thread, ping=True)
 
     took = fmt_age(time.time() - t0)
-    auto_resume = (status == "partial" and meta.get("resume_policy") == "auto"
-                   and attempt_num < int(meta.get("max_attempts") or 1))
+    auto_resume = can_resume(meta, status, reason, is_check)
     metas = [e for e in csv(meta.get("expects")) if e.endswith("meta.md")]
-    if status == "done" and metas:
+    if is_check:
+        if status == "done":
+            note.progress(tid, CHECK_DONE.get(tid, "확인 결과를 저장했습니다."), thread)
+            Notifier(clone, "research-lead").progress("retry-" + tid,
+                f"{CHECK_LABELS.get(tid, '설치')} 확인의 재시도가 완료되었습니다. 최종 설치 검증을 계속합니다.", thread, existing_only=True)
+        elif not auto_resume:
+            note.progress(tid, f"{CHECK_LABELS.get(tid, '설치')} 확인을 완료하지 못했습니다. 현재 결과와 원인은 설치 확인 보드에 보존했습니다.", thread)
+            Notifier(clone, "research-lead").progress("retry-" + tid,
+                f"{CHECK_LABELS.get(tid, '설치')} 확인을 재시도했지만 완료하지 못했습니다. 자동 재시도를 멈추고 결과를 보존했습니다.", thread, existing_only=True)
+    elif status == "done" and metas:
         note.progress(tid, f":checkered_flag: **{tid} done — round checkpoint** (reviewed commit `{base[:12]}`). "
                       f"{checkpoint(clone / metas[0])}", thread)
-        note.post(f"Read `{metas[0]}` and tell research-lead your decision.", thread, ping=True)
     elif status == "done" and meta.get("gate") == "human":
         note.progress(tid, f":white_check_mark: **{tid}** done in {took} — {headline(out)}", thread)
-        note.post(meta.get("notify_done") or
-                  f"**{tid}** is ready for your decision. Ask research-lead to review the result.",
-                  thread, ping=True)
     elif status == "done" and meta.get("notify_done"):
         note.progress(tid, f":white_check_mark: **{tid}** done in {took} — {headline(out)}", thread)
-        note.post(meta['notify_done'], thread, ping=True)
     elif status == "done":
         note.progress(tid, f":white_check_mark: **{tid}** done in {took} — {headline(out)}", thread)
     else:
         icon = ":no_entry:" if status == "blocked" else (":hourglass:" if status == "partial" else ":x:")
         note.progress(tid, f"{icon} **{tid}** {status} after {took} — {reason or headline(out)}", thread)
-        if not auto_resume:
-            note.post(f"**{tid}** needs a decision. Research-lead will review the board entry.", thread, ping=True)
 
     if status == "done":
         for name, data, mime, label in deliveries(meta, clone, base):
@@ -1461,6 +1518,10 @@ def execute(a, clone, p, me):
     if role in BLIND:
         shutil.rmtree(work, ignore_errors=True)
     if auto_resume:
+        if is_check:
+            Notifier(clone, "research-lead").progress("retry-" + tid,
+                f"{CHECK_LABELS.get(tid, '설치')} 확인의 완료 조건을 충족하지 못해 저장된 결과에서 다시 시도합니다 "
+                f"({attempt_num + 1}/{meta.get('max_attempts', '2')}). 사용자가 조치할 필요는 없습니다.", thread)
         meta.update(status="ready", claimed_by="", base="", updated=now())
         original = re.split(r"\n## Result — ", body)[0].rstrip() + "\n"
         save(p, meta, original)
@@ -1529,6 +1590,9 @@ def coordinate_event(a, clone, event):
               "this event cannot duplicate work. Give a short summary of what you changed.\n"
               f"Event: {json.dumps(event, ensure_ascii=False, sort_keys=True)}\n"
               + SENSITIVE_NOTE.get(sens, ""))
+    if installation_check(clone):
+        prompt += ("\nThis is an installer-owned check. Its runner owns bounded retries. Do not change task status, "
+                   "create extra tasks, retry exhausted checks, or declare installation passed. Inspect and summarize only.\n")
     wr(query, prompt)
     cmd = [a.hermes, "-p", "research-lead", "chat", "-Q", "--query-file", str(query),
            "--max-turns", str(TEAM_MAX_TURNS)]
@@ -1568,24 +1632,45 @@ def notify_event(clone, event, meta):
     if receipt.exists():
         return
     status, tid = event.get("status", "unknown"), event.get("task", "unknown")
+    if installation_check(clone) and meta.get("id"):
+        # The installer owns the Korean phase/final summary; workers post one result.
+        # Do not replay a stale failure as a new user decision during recovery.
+        return
+    gate = needs_approval(clone, meta) if meta.get("id") else False
+    current_tasks = tasks(clone)
+    all_done = bool(current_tasks) and all(m.get("status") == "done" for _, m, _ in current_tasks.values())
+    round_outputs = [p for p in csv(meta.get("expects")) if p.endswith("meta.md")]
+    if status == "done" and not gate and not meta.get("notify_done") and not round_outputs and not all_done:
+        return  # ordinary completions already have the worker's concise result
+    if status == "done" and all_done and not gate and not meta.get("notify_done") and not round_outputs:
+        # Several queued ledger events may all observe the same completed board.
+        key = hashlib.sha256((str(clone) + json.dumps({t: m for t, (_, m, _) in current_tasks.items()}, sort_keys=True)).encode()).hexdigest()
+        receipt = TEAM_HOME / "run" / "notifications" / (key + ".json")
+        if receipt.exists():
+            return
     outputs = ", ".join(f"`{p}`" for p in event.get("outputs", {})) or "see task details on the research board"
-    text = f"**{repo_name(str(clone))} / {tid}: {status}**\nOutputs: {outputs}."
+    text = (f"**{project_name(clone)}** — " + ("The planned tasks have finished." if status == "done" and all_done and not gate
+            else f"{tid} is ready for review." if status == "done" else f"{tid} needs attention.") + f"\nOutputs: {outputs}.")
+    if meta.get("notify_done") and status == "done":
+        text += "\n" + meta["notify_done"]
+    if round_outputs and status == "done":
+        text += f"\nRead `{round_outputs[0]}` and tell research-lead your decision."
     if status in ("failed", "blocked", "partial"):
         text += "\nWork needs attention; saved results are retained. " + str(event.get("stop_reason") or "Review the task report before continuing.")
-    gate = needs_approval(clone, meta) if meta.get("id") else False
     if gate:
         text += ("\n**Your approval is required. New tasks in this project are paused.** "
                  "Review the outputs, then reply in this thread with:\n"
                  f"`approve {tid} {approval_token(clone, meta)}`\n"
                  "For changes, tell research-lead what to revise instead of approving.")
-    dashboard = TEAM_HOME / "dashboard.json"
-    if dashboard.is_file():
-        try:
-            text += "\nResearch board (on the host PC): " + json.loads(rd(dashboard))["url"]
-        except (ValueError, KeyError):
-            pass
+    link = dashboard_url(clone)
+    if link:
+        text += "\nResearch board (on the host PC): " + link
+    if installation_check(clone):
+        text = "설치 확인의 백그라운드 서비스에서 문제가 발생했습니다. 저장된 결과는 보존했습니다. 설치 확인 보드에서 원인을 확인하세요."
+        if link:
+            text += "\n[이번 설치 확인 보드](" + link + ")"
     note = Notifier(clone, "research-lead")
-    pid = note.post(text, meta.get("thread", ""), ping=gate or status in ("failed", "blocked", "partial"))
+    pid = note.post(text, meta.get("thread", ""), ping=gate or bool(meta.get("notify_done")) or bool(round_outputs) or status in ("failed", "blocked", "partial"))
     if not pid:
         raise RuntimeError("lead notification pending; Mattermost delivery will be retried")
     receipt.parent.mkdir(parents=True, exist_ok=True)
@@ -1674,12 +1759,13 @@ def cmd_coordinate(a):
                         task_file = clone / TASKS / f"{event.get('task', '')}.md"
                         meta = load(task_file)[0] if task_file.is_file() else {}
                         notify_event(clone, event, meta)
-                        continuing = (event.get("status") == "partial" and meta.get("resume_policy") == "auto"
-                                      and int(event.get("attempt") or 1) < int(meta.get("max_attempts") or 1))
+                        continuing = can_resume({**meta, "attempt": event.get("attempt", 1)},
+                            event.get("status"), event.get("stop_reason", ""), installation_check(clone))
                         human_gate = meta.get("gate") == "human" or bool(pending_approvals(clone))
                         experiment_pause = (event.get("status") == "partial" and
                                             meta.get("assignee") == "research-experimenter")
-                        if not (continuing or human_gate or experiment_pause):
+                        check_stopped = installation_check(clone) and event.get("status") != "done"
+                        if not (continuing or human_gate or experiment_pause or check_stopped):
                             try:
                                 coordinate_event(a, clone, event)
                             except LeadTurnPartial as e:
@@ -1771,8 +1857,6 @@ def cmd_run(a):
                             continue
                         waits.pop(tid, None)
                         if claim(c, p, me):
-                            Notifier(c, a.profile or a.role).progress(
-                                tid, f":arrow_forward: **{tid}** picked up by {a.role} ({me})", m.get("thread", ""))
                             execute(a, c, p, me)
                             did = True
                         break

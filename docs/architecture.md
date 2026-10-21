@@ -129,3 +129,116 @@ attestation은 fresh same-run proof가 만든 연속성 기록이지만 서명/M
 ```
 
 진단 ZIP은 Hermes 홈을 순회하지 않습니다. 마법사가 생성한 허용 목록 파일만 복사하고 토큰과 알려진 로컬 경로를 다시 정제합니다.
+
+
+## Proposed Mattermost research board — planning only (2026-10-22)
+
+**Status: proposal, not implemented or installed.** Version 0.15.1 fixes the current local
+board and installation checks. Moving the board into Mattermost is a separate decision.
+
+### Options before choosing a plugin
+
+| Approach | User experience | Trade-off | Recommendation |
+| --- | --- | --- | --- |
+| Pinned status post plus interactive buttons/dialogs | A compact project summary and approval actions inside a channel | Least UI code, but no persistent graphical task board or useful portfolio view | Fallback or small first step |
+| Existing Mattermost Boards plugin | Existing Kanban views integrated with Mattermost | Requires version/edition eligibility checks and synchronization with the research task engine; currently in maintenance mode | Evaluate only if already deployed and supported |
+| Dedicated Hermes Research plugin | Channel board panel, full board view, and cross-project dashboard inside Mattermost | Requires a maintained server/webapp plugin and a local-runtime bridge | Recommended for the requested experience |
+
+Mattermost supports interactive posts and dialogs, which makes the lightweight option feasible.
+[Interactive messages](https://docs.mattermost.com/developers/integrate/plugins/interactive-messages)
+
+The official Boards installation guide describes the existing plugin as maintenance-only and
+anticipates migration to a future core feature. Do not assume historical Focalboard setup guides
+or older bundling behavior apply to the current installer.
+[Boards installation and maintenance status](https://docs.mattermost.com/administration-guide/configure/install-boards)
+
+Webapp plugins extend both Mattermost web and Desktop. The proposed board can therefore live
+inside the existing Desktop application without a separate local browser window.
+[Webapp plugin support](https://docs.mattermost.com/developers/integrate/plugins/components/webapp)
+
+### Project organization
+
+| Surface | Proposed purpose |
+| --- | --- |
+| Existing research-team channel (or the user's current equivalent) | Project intake, team-wide questions and short cross-project notices |
+| One channel per research project, e.g. research-rag-evaluation | Scope discussion, milestone threads, decisions and concise worker results for that project |
+| One board bound to each project's stable channel ID | Task columns, assignees, dependencies, saved outputs, reviews and approval checkpoints |
+| Research overview in the Mattermost menu | All projects the viewer can access; stage, active work, waiting decisions, blocked work, last update and host health |
+| Installation checks section | Setup checks and operational diagnostics, excluded from research progress totals |
+
+Use one Mattermost team/workspace and reuse the same four bot accounts across project channels.
+New projects do not create new agents or tokens. Lead keeps a separate project context and routes
+work by immutable project ID and channel ID; channel renaming cannot break the binding. Threads
+represent milestones or discussions, not separate projects. Default to one project per channel;
+shared channels can later offer an explicit project selector. Archiving a project retains its
+channel, outputs and history unless the user explicitly chooses otherwise.
+
+### Proposed interface
+
+A **연구 보드** channel-header button opens the current project's compact task panel. An
+**전체 화면** action opens a wider board within Mattermost. The main menu **연구 전체 현황**
+opens the portfolio dashboard. Task details show the latest human-readable result, files,
+review outcome and decision needed; internal paths, hashes and attempts live in a details section.
+The SDK provides channel-header actions, right-hand sidebars, team routes, menu items and
+WebSocket event handlers. Prefer these extension points over forking Mattermost or using its
+internal product-registration API.
+[Plugin SDK extension points](https://docs.mattermost.com/developers/integrate/reference/webapp)
+
+Proposed columns: planned/queued, in progress, awaiting review, awaiting user confirmation,
+completed, and blocked. Map these to existing task and gate records; never infer approval from a
+drag-and-drop action. A completed task is not automatically a completed project. Show phase-level
+milestones and task counts rather than inventing a scientific progress percentage.
+
+### Proposed data and control flow
+
+1. Existing local Git task records, result files and approvals remain authoritative initially.
+   GitHub stays optional. The board is a view and controlled command surface, not a second
+   independently editable task database.
+2. A bridge in the existing Windows team service publishes versioned snapshots to a Mattermost
+   server plugin. The Linux server plugin caches display records; it does not mount or mutate
+   Windows worktrees. Browsers request the Mattermost plugin API using their normal session.
+3. The bridge initiates the connection to Mattermost. This works with the local Docker server
+   and avoids requiring another user's browser or the container to reach the host's loopback
+   board. Do not embed the current 127.0.0.1 page in an iframe.
+4. User actions become authenticated, versioned, idempotent commands. The bridge rechecks the
+   current task version and project authority before recording approvals or revisions. The UI
+   distinguishes command queued, accepted, rejected and applied. The existing text approval
+   route stays available while button approval is validated.
+5. Publish only selected artifacts through Mattermost files, with a reference to their committed
+   version. Keep service credentials and machine paths out of client bundles. Enforce channel
+   membership and project approver identity server-side for reads, downloads and actions.
+6. Send channel-scoped change events, filter the portfolio on the server, and show last successful
+   synchronization. If a research host is offline, cached results remain visible as stale and
+   execution-changing controls are disabled. Do not label cached results as live.
+
+### Concurrent projects
+
+Each project has its own local repository, context, board, channel, ledger and approval gates.
+An approval pause in project A must not stop project B. Share the four role services with explicit
+round-robin scheduling, per-project concurrency/cost limits and a configurable overall resource
+budget. One active writer/reviewer must not starve a second project. Keep reviewer input isolation
+and existing experiment-approval controls. Do not multiply reviewer slots merely because more
+channels exist. Show queued capacity and project priority in the overall dashboard.
+
+### Implementation sequence if approved later
+
+1. **Compatibility spike:** verify the deployed server edition/version, plugin upload policy,
+   Desktop behavior, and supported SDK hooks. The repository pins Mattermost 11.11.0; the running
+   server version was not confirmed by the unauthenticated ping. Current online docs also discuss
+   12.x React/JSX requirements, so target and test the deployed version explicitly, not latest-only
+   examples. No server upgrade is implied by this proposal.
+2. **Read-only plugin:** add project/channel registry, local-service bridge, channel board,
+   portfolio and artifact links. Prove two projects have isolated contexts and access controls.
+3. **Controlled actions:** create projects through a dialog or lead request, request revisions,
+   pause/resume and approve versioned checkpoints. Validate permissions, double-clicks, stale
+   approvals, reconnect replay, offline operation and wrong-channel requests before enabling writes.
+4. **Migration:** map existing projects to existing or new channels without moving their files or
+   recreating bots. Keep historical threads linked. Switch installer and bot links to Mattermost
+   after validation; retain the local board as a temporary troubleshooting fallback, then retire
+   its normal service entry point after the integrated view is accepted.
+
+Acceptance checks: two simultaneous projects; independent approvals; no task/result/context leak
+between private channels; fair scheduling; same output/version in Git and Mattermost; host restart
+recovery; clear Korean setup notices; no bot-to-bot chat delegation; browser and Desktop testing.
+The first integrated release should prioritize visibility. Task editing and richer scheduling can
+follow only after the read-only synchronization is reliable.

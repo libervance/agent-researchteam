@@ -116,18 +116,36 @@ class Board:
                           "gate": meta.get("gate"), "report": match[2], "outputs": outputs,
                           "approval_command": f"approve {tid} {token}" if waiting else "",
                           "thread": meta.get("thread", "")})
-        return {"id": key, "name": project.name, "path": str(project), "commit": commit,
+        check = None
+        if project.name.startswith("_selftest-"):
+            check = {"outcome": "unconfirmed", "phase": "최종 설치 확인 기록이 없습니다. 작업 완료 수만으로 설치 통과를 판단하지 않습니다."}
+            for record_path in (self.home / "checks" / (project.name + ".json"), self.home / "live-test.json"):
+                try:
+                    record = json.loads(record_path.read_text(encoding="utf-8"))
+                    if Path(record.get("folder", "")).name != project.name:
+                        continue
+                    passed = (record.get("passed") is True and record.get("lead") == "done" and
+                              all(record.get(k) is True for k in ("ledger_intact", "delivered", "dashboard_ready")))
+                    check = {"outcome": "passed" if passed else record.get("outcome", "incomplete"),
+                             "phase": record.get("phase", "설치 확인이 중단되었습니다. 이후 작업이 완료되어도 최종 검증을 다시 진행해야 합니다."),
+                             "error": record.get("error"), "updated": record.get("updated")}
+                    break
+                except (OSError, ValueError, TypeError):
+                    continue
+        return {"id": key, "name": project.name, "path": str(project), "commit": commit, "check": check,
                 "source": source, "test": project.name.startswith("_selftest-"), "tasks": tasks,
                 "paused": any(t["column"] == "approval" for t in tasks), "error": None}
 
-    def snapshot(self, project_name=None, include_tests=False):
+    def snapshot(self, project_name=None, include_tests=False, checks_only=False):
         with self.lock:
-            key = (project_name, include_tests)
+            key = (project_name, include_tests, checks_only)
             if self.cached_key == key and self.cached is not None and time.monotonic() - self.cached_at < 3:
                 return self.cached
             projects = []
             for project_id, path in self.projects().items():
                 if project_name and path.name != project_name:
+                    continue
+                if checks_only and not path.name.startswith("_selftest-"):
                     continue
                 if not project_name and not include_tests and path.name.startswith("_selftest-"):
                     continue
@@ -196,7 +214,7 @@ def handler(board):
                     return self.reply(200, file.read_bytes(), mime + "; charset=utf-8")
                 if url.path == "/api/projects":
                     query = urllib.parse.parse_qs(url.query)
-                    return self.reply(200, json.dumps(board.snapshot(query.get("project", [None])[0], query.get("tests") == ["1"]), ensure_ascii=False).encode(), "application/json; charset=utf-8")
+                    return self.reply(200, json.dumps(board.snapshot(query.get("project", [None])[0], query.get("tests") == ["1"], query.get("view") == ["checks"]), ensure_ascii=False).encode(), "application/json; charset=utf-8")
                 if url.path == "/api/output":
                     query = urllib.parse.parse_qs(url.query)
                     path = query["path"][0]

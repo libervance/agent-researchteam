@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SKIP = {"manifest.json", "build_manifest.py"}
+SKIP = {"manifest.json"}
 
 
 def files():

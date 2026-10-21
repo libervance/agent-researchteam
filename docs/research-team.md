@@ -164,8 +164,9 @@ attachments. Task counts are progress indicators, not a percentage estimate of r
 
 ### Notifications and confirmations
 
-The coordinator sends lead-bot notices for completed, partial, failed and blocked board
-results, with saved output paths, and requests decisions for checkpoints. It retries failed
+Workers send one concise result per task. The coordinator sends lead-bot notices for milestones,
+partial/failed/blocked work and decisions; routine successful tasks do not get a duplicate lead post.
+Checkpoint and explicit completion notices come from the lead. It retries failed
 notices and records delivery receipts. Runtime synchronization errors produce a separate
 attention notice. The lead's instructions additionally require scope, location, assignments,
 material findings, uncertainties, missing evidence, resource/scope changes and final handoff.
@@ -188,3 +189,35 @@ For changes, ask lead to append your feedback and reset that same checkpoint tas
 the revised result will request a fresh decision. Experiment protocol approval is an
 additional record and remains mandatory before launching experiments. Submission/publication
 remain actions for the user.
+
+## Installation check navigation and recovery (0.15.1)
+
+The board has separate **Research projects** and **Installation checks** sections. The default
+`reports` project can legitimately have zero tasks. The installer button and test-thread links
+select the exact check via `?view=checks&project=_selftest-YYYYMMDD-HHMMSS`. Switching to
+Installation checks without a project selects the newest check. A missing linked project is
+shown as unavailable, never silently replaced by an empty `reports` board.
+
+Four completed worker tasks are not proof of installation success. The banner separately
+shows the saved installation outcome and phase. New per-run records are stored in
+`RuntimeRoot/research/checks/`; `installation-check.json` selects the latest run. Historical
+`live-test.json` evidence remains readable. Older checks without final evidence are unconfirmed.
+Restarting the installer does not retroactively turn failed tests into successful tests.
+
+Installation probes alone may retry a failed process/output check once (two attempts total).
+Blocked work, profile drift and frozen-file violations are not retried. Capped work retains
+its existing bounded resume policy. Real failed experiments are never automatically restarted
+by this change. The installer waits through the runner's failed-to-ready transition, while
+exhaustion, blocked work, runner publication errors and the overall deadline still stop it.
+Attempt reports and ledger entries retain the failure reason and output evidence.
+
+All installation progress and result messages are Korean. The lead updates one phase-summary
+post; each worker posts one short result, with no pickup/heartbeat clutter. Retry notices are
+updated when recovery finishes. The reviewer attachment is uploaded only once by the final
+verification, downloaded, and checked against the saved bytes. The final summary only reports
+success after the review verdict, lead query, ledger, attachment and graphical board checks pass.
+
+To verify an update: reopen the stable installer, check version 0.15.1, update the existing team,
+and use **연구 보드 열기** during the check. Confirm the selected run matches the test thread,
+check its four task cards, and wait for the final installation outcome. Existing thread messages
+are historical and are not rewritten. No real model validation is implied by offline tests.

@@ -61,6 +61,10 @@ if "CAPPED" in prompt and "LEAD-CAPPED" not in prompt and n == 1:
     if "CAPPED-DONE" in prompt:
         print("STATUS: done")
     sys.exit(0)
+if "INLINE-DONE" in prompt:
+    print("Saved the requested output. STATUS: done"); sys.exit(0)
+if "NO-MARKER" in prompt and ("ALWAYS" in prompt or n == 1):
+    print("Saved an output without a completion marker"); sys.exit(0)
 print("work done")
 print("STATUS: blocked — cannot" if "BLOCK" in prompt else "STATUS: done")
 '''
@@ -339,8 +343,11 @@ class BoardTests(Base):
         self.assertEqual(1, len(self.calls()))
 
     def test_bot_notice_does_not_mention_another_bot(self):
+        (self.paper / ".tasks/project.json").write_text("{}")
+        git("add", ".tasks/project.json", cwd=self.paper); git("commit", "-qm", "managed", cwd=self.paper); git("push", "-q", cwd=self.paper)
         self.task("w1", "research-lead", "WRITE-PAPER", "--notify-done", "Tell @research-lead to continue")
         self.run_role("research-lead")
+        self.board("coordinate", "--once", "--hermes", str(self.hermes))
         messages = [p["message"] for p in MockMattermost.posts]
         self.assertFalse(any("@research-lead" in message for message in messages))
         self.assertTrue(any("@me" in message for message in messages))
@@ -363,10 +370,13 @@ class BoardTests(Base):
         self.assertEqual(0, self.board("ledger", str(self.paper), "--verify", check=False).returncode)
 
     def test_blind_reviewer_sees_snapshot_cannot_edit_paper_and_checkpoint_names_commit(self):
+        (self.paper / ".tasks/project.json").write_text("{}")
+        git("add", ".tasks/project.json", cwd=self.paper); git("commit", "-qm", "managed", cwd=self.paper); git("push", "-q", cwd=self.paper)
         self.task("w1", "research-lead", "WRITE-PAPER")
         self.run_role("research-lead")
         self.task("r1", "research-reviewer", "REVIEW", "--expects", "reviews/round-1/meta.md", "--after", "w1")
         self.run_role("research-reviewer")
+        self.board("coordinate", "--once", "--hermes", str(self.hermes))
         call = [c for c in self.calls() if c["profile"] == "research-reviewer"][0]
         self.assertFalse(call["has_git"]); self.assertFalse(call["has_tasks"])
         self.assertNotEqual("reviewer edit", (self.paper / "paper/main.tex").read_text(encoding="utf-8"))
@@ -423,7 +433,8 @@ class BoardTests(Base):
         with zipfile.ZipFile(io.BytesIO(data)) as z:
             self.assertIn("1", z.read("word/document.xml").decode())
         posted = [p for p in MockMattermost.posts if p.get("file_ids")]
-        self.assertTrue(posted and "verified" in posted[0]["message"])
+        self.assertTrue(posted and "첨부 파일이 저장된 결과와 일치" in posted[0]["message"])
+        self.assertNotIn("sha256", posted[0]["message"])
 
     def test_lead_delivers_committed_report_and_refuses_local_edits(self):
         d = self.paper / "notes/r"; d.mkdir(parents=True)
