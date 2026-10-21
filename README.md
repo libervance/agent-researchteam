@@ -47,10 +47,10 @@
 저장소 소스에서 Windows PowerShell로 실행합니다. 출력 폴더는 소스 폴더 밖의 새 경로를 지정하세요.
 
 ```powershell
-.\Build-Distributions.ps1 -DestinationRoot C:\Temp\Hermes-0.14.2
+.\Build-Distributions.ps1 -DestinationRoot C:\Temp\Hermes-Installer\Packages
 ```
 
-`Hermes-Research-Setup-0.14.2.zip`, `Hermes-Admin-Setup-0.14.2.zip`, `Hermes-User-Setup-0.14.2.zip`, `SHA256SUMS.txt`가 만들어집니다. Research ZIP에는 연구팀 구성(`team/` — 다섯 역할의 지침·스킬, 작업 보드 실행기, 팀 서비스, 모델 라우터, 논문 템플릿)과 설치 중 실제 테스트가 포함되며 ZIP 안에는 파일별 `FILES.sha256`도 있습니다. 소스 허용 목록만 패키징하며 개인 설치 상태·토큰·로그·Git 기록은 포함하지 않습니다. 같은 이름의 파일은 덮어쓰지 않습니다. 생성·해시 대조·압축 해제 후 세 GUI의 비설치 검사는 `tests/Run-DistributionTests.ps1`로 실행합니다. 빌드가 GitHub 게시나 코드 서명 또는 설치 PC의 실제 분업 검증을 수행하지는 않습니다.
+`Hermes-Research-Setup-0.14.2.zip`, `Hermes-Admin-Setup-0.14.2.zip`, `Hermes-User-Setup-0.14.2.zip`, `SHA256SUMS.txt`가 만들어집니다. Research ZIP에는 연구팀 구성(`team/` — 다섯 역할의 지침·스킬, 작업 보드 실행기, 팀 서비스, 모델 라우터, 논문 템플릿)과 설치 중 실제 테스트가 포함되며 ZIP 안에는 파일별 `FILES.sha256`도 있습니다. 소스 허용 목록만 패키징하며 개인 설치 상태·토큰·로그·Git 기록은 포함하지 않습니다. 같은 이름의 파일은 덮어쓰지 않습니다. 로컬 실행용 설치기는 버전 없는 `Hermes-Installer` 폴더 하나로 유지하고, 검증된 최신 Research 패키지의 내용을 그 폴더에 배치합니다. `Packages`에는 최신 ZIP·체크섬만 보관하고 이전 버전 배포 폴더는 정리합니다. 실제 연구팀 갱신은 사용자가 설치기에서 직접 실행합니다. 생성·해시 대조·압축 해제 후 세 GUI의 비설치 검사는 `tests/Run-DistributionTests.ps1`로 실행합니다. 빌드가 GitHub 게시나 코드 서명 또는 설치 PC의 실제 분업 검증을 수행하지는 않습니다.
 
 ## 빠른 시작
 
