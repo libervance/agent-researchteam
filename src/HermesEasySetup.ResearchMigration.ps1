@@ -218,6 +218,19 @@ function Stop-HermesResearchMigrationTasks {
     throw 'ResearchMigrationTaskStopTimeout'
 }
 
+function Get-HermesResearchSelfTestDiagnostic {
+    param([string]$Text, [hashtable]$Environment)
+    foreach ($key in $Environment.Keys) {
+        if ([string]$key -match '(?i)token|secret|password|api.?key') {
+            $secret = [string]$Environment[$key]
+            if ($secret.Length -gt 0) { $Text = $Text.Replace($secret, '[REDACTED]') }
+        }
+    }
+    $safe = [string](Protect-HermesLogText $Text)
+    if ($safe.Length -gt 1200) { $safe = $safe.Substring($safe.Length - 1200) }
+    return $safe.Trim()
+}
+
 function Invoke-HermesResearchSelfTest {
     <# The live end-to-end test (team_selftest.py): every role does one small real task through
        the running service, the lead answers through its own profile, delivery and ledger verified. #>
@@ -236,18 +249,46 @@ function Invoke-HermesResearchSelfTest {
     $result = Invoke-HermesProcess -FilePath $Python -ArgumentList @('-B', $script, '--workspace', $WorkspacePath, '--channel', $ChannelID, '--hermes', $CommandPath, '--mention', $Mention, '--timeout', [string]$TimeoutSeconds) -WorkingDirectory $WorkspacePath -Environment $Environment -TimeoutSeconds ($TimeoutSeconds + 1200) -OutputLineCallback $onLine
     if (-not $result.Started -or $result.TimedOut) { $test.ErrorCode = 'LiveTestTimeout'; return [pscustomobject]$test }
     try {
-        $answer = $result.StdOut.Trim().Split("`n")[-1] | ConvertFrom-Json
+        if ([string]::IsNullOrWhiteSpace($result.StdOut)) { throw 'Self-test returned no JSON result.' }
+        $answer = $result.StdOut.Trim().Split("`n")[-1] | ConvertFrom-Json -ErrorAction Stop
+        if ($null -eq $answer -or $answer -isnot [pscustomobject]) { throw 'Self-test result must be a JSON object.' }
+        foreach ($field in @('passed','live','ledger_intact','delivered')) {
+            if (-not $answer.PSObject.Properties[$field] -or $answer.$field -isnot [bool]) { throw "Invalid self-test field: $field" }
+        }
+        foreach ($field in @('folder','roles','lead','error')) {
+            if (-not $answer.PSObject.Properties[$field]) { throw "Missing self-test field: $field" }
+        }
+        if ($answer.folder -isnot [string] -or $answer.roles -isnot [pscustomobject]) { throw 'Invalid self-test folder or roles.' }
+        foreach ($role in @('research-librarian','research-reviewer','research-writer','research-experimenter')) {
+            if (-not $answer.roles.PSObject.Properties[$role] -or $answer.roles.$role -isnot [string]) { throw "Missing self-test role: $role" }
+        }
+    } catch {
+        $test.ErrorCode = $(if ($result.ExitCode -ne 0) { 'LiveTestProcessFailed' } else { 'LiveTestEvidenceRejected' })
+        $test.Detail = Get-HermesResearchSelfTestDiagnostic -Text ("exit {0}: {1}`n{2}" -f $result.ExitCode, $_.Exception.Message, $result.StdErr) -Environment $Environment
+        return [pscustomobject]$test
+    }
+    try {
+        # Validate before replacing evidence: an empty/crashed child must not erase the last result.
         Write-HermesResearchAtomicText -LiteralPath $evidence -Text (($answer | ConvertTo-Json -Depth 6) + "`n")
+    } catch {
+        $test.ErrorCode = 'LiveTestEvidenceWriteFailed'
+        $test.Detail = Get-HermesResearchSelfTestDiagnostic -Text $_.Exception.Message -Environment $Environment
+        return [pscustomobject]$test
+    }
+    try {
         $done = @($answer.roles.PSObject.Properties | Where-Object { [string]$_.Value -ceq 'done' } | ForEach-Object { $_.Name })
         if ([string]$answer.lead -ceq 'done') { $done += 'research-lead' }
         $test.Live = ($answer.live -eq $true)
         $test.RequestID = [IO.Path]::GetFileName([string]$answer.folder)
         $test.Roles = @($done | Sort-Object)
         $test.AuditPassed = ([string]$answer.roles.'research-reviewer' -ceq 'done')
-        $test.Detail = [string]$answer.error
+        $test.Detail = Get-HermesResearchSelfTestDiagnostic -Text ([string]$answer.error) -Environment $Environment
         if ($result.ExitCode -eq 0 -and $test.Live -and $answer.passed -eq $true -and $answer.ledger_intact -eq $true -and $answer.delivered -eq $true -and $test.Roles.Count -eq 5) {
             $test.Passed = $true; $test.ErrorCode = ''
         } else { $test.ErrorCode = 'LiveTestFailed' }
-    } catch { $test.ErrorCode = 'LiveTestEvidenceRejected' }
+    } catch {
+        $test.ErrorCode = 'LiveTestEvidenceRejected'
+        $test.Detail = Get-HermesResearchSelfTestDiagnostic -Text $_.Exception.Message -Environment $Environment
+    }
     return [pscustomobject]$test
 }

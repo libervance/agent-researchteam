@@ -15,6 +15,7 @@ Nothing here is a mock: it spends model calls, and it only passes on a PC where 
 models, web search and runners all work.
 """
 import argparse
+import importlib.util
 import json
 import os
 import subprocess as sp
@@ -22,10 +23,13 @@ import sys
 import time
 from pathlib import Path
 
-import research_board as rb
-
 HERE = Path(__file__).resolve().parent
 BOARD = HERE / "research_board.py"
+# The installer sets PYTHONSAFEPATH=1. Load this verified sibling explicitly;
+# do not enable imports from the user's workspace or weaken that environment.
+_board_spec = importlib.util.spec_from_file_location("_hermes_selftest_board", BOARD)
+rb = importlib.util.module_from_spec(_board_spec)
+_board_spec.loader.exec_module(rb)
 RUNNER_ROLES = ["research-librarian", "research-reviewer", "research-writer", "research-experimenter"]
 
 CLAUDE = """# Installation check
