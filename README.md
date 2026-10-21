@@ -3,7 +3,7 @@
 ## 실행 파일 선택
 
 - **다른 PC에서 연구실 마법사 실행:** 이 저장소에서 `Code → Download ZIP`으로 받아 압축을 전부 푼 뒤 `Start-HermesResearchSetup.cmd`를 더블클릭하세요. Git for Windows와 WSL2가 준비된 Windows 10/11 x64에서 `로컬 서버 → Hermes·모델 → 에이전트 5개` 순서로 진행합니다. Docker는 없으면 동의 후 설치할 수 있습니다. 모델 연결(모델 라우터의 API 키 또는 Codex 로그인), 작업 폴더, 작업 시간 한도와 동시 심사자 수를 화면에서 고르면 실제 다섯 역할 작업 테스트까지 진행합니다.
-- **1인 연구실:** `Start-HermesResearchSetup.cmd` — 같은 Windows PC에 Mattermost·Hermes와 논문·보고서 연구팀(총괄·조사·분석/실험·감사/심사·집필) 다섯 프로필을 구성합니다. 설치 테스트를 통과한 뒤 Mattermost에서 총괄 봇을 멘션해 `○○에 대한 보고서 작성해줘`(조사 → 독립 감사 → Word 보고서), `○○ 주제로 논문을 시작하자`(범위·주장·개요 확인 후 집필), `심사 라운드 돌려줘`(블라인드 심사 3건·인용 검증·종합 판정)처럼 요청합니다. [개인 연구실 안내](docs/research-guide.ko.md) · [연구팀 구조](docs/research-team.md)
+- **1인 연구실:** `Start-HermesResearchSetup.cmd` — 같은 Windows PC에 Mattermost·Hermes와 논문·보고서 연구팀(총괄·조사·분석/실험·감사/심사·집필) 다섯 프로필을 구성합니다. 3단계에서 누락된 봇 토큰을 한 번에 발급할 수 있으며, 새 봇은 작업 설정과 필수 동의를 마친 뒤 설치할 때 채널에 참여합니다. 설치 테스트를 통과한 뒤 Mattermost에서 총괄 봇을 멘션해 `○○에 대한 보고서 작성해줘`(조사 → 독립 감사 → Word 보고서), `○○ 주제로 논문을 시작하자`(범위·주장·개요 확인 후 집필), `심사 라운드 돌려줘`(블라인드 심사 3건·인용 검증·종합 판정)처럼 요청합니다. [개인 연구실 안내](docs/research-guide.ko.md) · [연구팀 구조](docs/research-team.md)
 - **사용자용:** `Start-HermesEasySetup.cmd` — 기존 연구실 서버에 Mattermost Desktop·Hermes 봇 연결.
 - **관리자용 (Windows 테스트 배포):** `Start-HermesAdminSetup.cmd` — 별도 Docker Mattermost 서버·시스템 관리자·팀·채널, Bot Control, 봇·토큰 발급, 선택적 NetBird 공유. [관리자 설치 안내](docs/admin-guide.ko.md)
 

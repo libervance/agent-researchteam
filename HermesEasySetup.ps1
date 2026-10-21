@@ -10,6 +10,7 @@ param(
     [ValidateSet('Later', 'Portal', 'Full')][string]$SetupMode = 'Portal',
     [switch]$Apply,
     [switch]$Resume,
+    [switch]$DeferBotChannelMembership,
     [switch]$UseExistingHermes,
     [switch]$InstallBotControl,
     [switch]$ForceDownload,
@@ -188,7 +189,7 @@ try {
                 $inputData = Unprotect-HermesLabInput -LiteralPath $inputPath
                 $arguments = @{ InputData = $inputData; ProgressCallback = $eventCallback }
                 if ($AdminRoot) { $arguments.DeploymentRoot = $AdminRoot }
-                if ($Action -eq 'AdminBotSetup') { $result = Invoke-HermesAdminBotSetup @arguments }
+                if ($Action -eq 'AdminBotSetup') { $result = Invoke-HermesAdminBotSetup @arguments -DeferChannelMembership:$DeferBotChannelMembership }
                 else { $result = Invoke-HermesAdminSetup @arguments -Resume:$Resume -InstallBotControl:$InstallBotControl }
                 if (-not $JsonEvents) { Write-ResultObject $result }
             } finally {

@@ -34,7 +34,7 @@ function Assert-HermesResearchWizardOptions {
     foreach ($key in $script:ResearchOptionRanges.Keys) {
         $amount = $value.$key; $range = $script:ResearchOptionRanges[$key]
         if (($amount -isnot [int] -and $amount -isnot [long]) -or $amount -lt $range[0] -or $amount -gt $range[1]) {
-            throw ('{0}: {1}~{2} 사이의 정수로 입력하세요.' -f @{ ReviewerSlots = '동시 심사 수'; TaskTimeoutMinutes = '작업 시간 한도(분)'; GatewayPort = '모델 라우터 포트' }[$key], $range[0], $range[1])
+            throw ('{0}: {1}~{2} 사이의 정수로 입력하세요.' -f @{ ReviewerSlots = '동시 심사 작업 수'; TaskTimeoutMinutes = '작업 시간 한도(분)'; GatewayPort = '모델 라우터 포트' }[$key], $range[0], $range[1])
         }
     }
     foreach ($flag in @('AllowModelEgress','AllowPublicWeb','MigrationConsent')) {

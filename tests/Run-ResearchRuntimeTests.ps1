@@ -181,6 +181,10 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
         Assert ($service.gateway.port -eq 18400 -and (Get-Content -Raw -LiteralPath (Join-Path $research 'service.json')) -notmatch 'sk-ant|' + ('a' * 26)) 'Service config names the router and carries no secret'
         $secrets = Read-Env (Join-Path $research 'private\service.env')
         Assert ($secrets['MATTERMOST_TOKEN__research-writer'] -ceq ('e' * 26) -and -not $secrets.ContainsKey('MATTERMOST_TOKEN__research-lead') -and $secrets['RESEARCH_GATEWAY_SECRET'] -cmatch '^[a-f0-9]{48}$') 'Each runner gets its own bot token; the lead''s stays in its profile'
+        $backupPaths = Get-HermesDefaultPaths -HermesHome $paths.HermesHome -InstallDir $paths.InstallDir -RuntimeRoot $paths.RuntimeRoot
+        $backupPrior = [IO.File]::ReadAllText((Join-Path $research 'team.json')) | ConvertFrom-Json
+        $backupFixture = Backup-HermesResearchMigration -Paths $backupPaths -Prior $backupPrior -Tasks @()
+        Assert ((Test-Path -LiteralPath (Join-Path $backupFixture 'private\bots.json')) -and (Test-Path -LiteralPath (Join-Path $backupFixture 'private\service.env')) -and (Test-Path -LiteralPath (Join-Path $backupFixture 'gateway\env')) -and (Test-Path -LiteralPath (Join-Path $backupFixture 'profiles\research-lead\.research-team'))) 'Five-role backup preserves bot, model and profile settings before replacement'
         $gwEnv = Read-Env (Join-Path $research 'gateway\env')
         Assert ($gwEnv['ANTHROPIC_API_KEY'] -ceq 'sk-ant-fixture-0123456789abcdef' -and -not $gwEnv.ContainsKey('OPENAI_API_KEY') -and $gwEnv['RESEARCH_GATEWAY_SECRET'] -ceq $secrets['RESEARCH_GATEWAY_SECRET']) 'Provider keys live only in the router env'
         $models = [IO.File]::ReadAllText((Join-Path $research 'gateway\models.json')) | ConvertFrom-Json
@@ -251,7 +255,7 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
         function script:Stop-HermesResearchMigrationTasks { param($Tasks, $BrokerIdentity) $script:migrationCalls.Add('stop') }
         function script:Exit-HermesResearchMaintenance { param($ResearchRoot) $script:migrationCalls.Add('exit') }
         $migrationInput = New-Input $old
-        Reject { Invoke-Setup $old $migrationInput } 'An earlier broker team is not replaced without the migration consent' '전환'
+        Reject { Invoke-Setup $old $migrationInput } 'An earlier broker team is not replaced without the migration consent' '교체'
         Assert ($script:migrationCalls.Count -eq 0 -and [IO.File]::ReadAllText((Join-Path $old.HermesHome 'profiles\research-lead\SOUL.md')) -ceq 'old persona research-lead') 'Refused migration touched nothing'
         $migrationInput.WizardOptions.MigrationConsent = $true
         $migrated = Invoke-Setup $old $migrationInput
@@ -266,6 +270,16 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
         }
         $newState = [IO.File]::ReadAllText((Join-Path $oldRoot 'team.json')) | ConvertFrom-Json
         Assert ($newState.Manager -ceq 'HermesEasySetup.ResearchTeam.v2' -and $newState.TeamID -ceq ('b' * 32)) 'The team record moves to the new team, keeping its id'
+        $fiveStatePath = Join-Path $research 'team.json'
+        $fiveState = [IO.File]::ReadAllText($fiveStatePath) | ConvertFrom-Json
+        $fiveState.PayloadManifestSha256 = '0' * 64
+        [IO.File]::WriteAllText($fiveStatePath, ($fiveState | ConvertTo-Json -Depth 8))
+        $fiveInput = New-Input $paths
+        Reject { Invoke-Setup $paths $fiveInput } 'An obsolete five-role team needs explicit beta consent when replacing without reset' '베타'
+        $fiveInput.WizardOptions.MigrationConsent = $true
+        $beforeBackup = @($script:migrationCalls | Where-Object { $_ -ceq 'backup' }).Count
+        $fiveResult = Invoke-Setup $paths $fiveInput
+        Assert ($fiveResult.Succeeded -and $fiveResult.MigrationBackupPath -like '*migrations*' -and @($script:migrationCalls | Where-Object { $_ -ceq 'backup' }).Count -eq ($beforeBackup + 1)) 'Beta replacement of an obsolete five-role team backs up settings before updating'
     } finally {
         if (Test-Path -LiteralPath $script:fixtureRoot) { Remove-Item -LiteralPath $script:fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue }
     }

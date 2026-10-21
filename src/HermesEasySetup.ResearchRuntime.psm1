@@ -321,8 +321,9 @@ function Invoke-HermesResearchTeamSetup {
     $root = Join-Path $paths.RuntimeRoot 'research'
     $statePath = Join-Path $root 'team.json'
     $prior = Get-HermesResearchPriorTeam -StatePath $statePath -Paths $paths -OwnerSID $owner -ServerURL $summary.ServerURL -HomeChannelID $summary.HomeChannelID
-    if ($null -ne $prior -and $prior.Kind -ceq 'Team' -and -not $ReuseExistingProfiles) { throw '이 PC에 이미 연구팀이 있습니다. 「연구팀 재설정」을 선택해 같은 팀을 갱신하세요.' }
-    if ($null -ne $prior -and $prior.Kind -ceq 'Broker' -and -not $options.MigrationConsent) { throw '이전 4역할 연구팀(분배 서비스)이 있습니다. 「기존 연구팀 전환」에 동의하면 기록을 보존한 채 새 팀으로 바꿉니다.' }
+    $obsoleteTeam = ($null -ne $prior -and $prior.Kind -ceq 'Team' -and (-not $prior.PSObject.Properties['PayloadManifestSha256'] -or [string]$prior.PayloadManifestSha256 -cne [string]$payload.ManifestSha256))
+    if ($null -ne $prior -and $prior.Kind -ceq 'Team' -and -not $ReuseExistingProfiles -and -not ($obsoleteTeam -and $options.MigrationConsent)) { throw '이 PC에 이미 연구팀이 있습니다. 같은 팀을 갱신하려면 「연구팀 재설정」을 선택하세요. 오래된 5역할 팀 교체는 베타 실험 동의가 필요합니다.' }
+    if ($null -ne $prior -and $prior.Kind -ceq 'Broker' -and -not $options.MigrationConsent) { throw '이전 4역할 연구팀(분배 서비스)이 있습니다. 베타 실험용 「기존 연구팀 교체」에 동의하면 기록을 보존한 채 새 팀으로 바꿉니다.' }
     $teamID = $(if ($null -ne $prior) { [string]$prior.TeamID } else { [guid]::NewGuid().ToString('N') })
     $owned = @{}
     foreach ($agent in @($summary.Agents)) {
@@ -350,6 +351,14 @@ function Invoke-HermesResearchTeamSetup {
         $serviceConfig = Join-Path $root 'service.json'
         $serviceScript = Join-Path $root 'team\shared\team_service.py'
         if ($null -ne $prior -and $prior.Kind -ceq 'Team') {
+            if ($obsoleteTeam -and $options.MigrationConsent) {
+                Publish-HermesResearchStage $ProgressCallback 'research-migration' '오래된 5역할 팀의 설정과 실행 작업을 백업합니다.' 11
+                $migrationTasks = @()
+                foreach ($plan in @($servicePlan,$leadPlan)) {
+                    if (@(Get-HermesResearchGatewayTask -TaskName $plan.TaskName).Count -eq 1) { $migrationTasks += [pscustomobject]@{ Plan = $plan } }
+                }
+                $migrationBackup = Backup-HermesResearchMigration -Paths $paths -Prior $prior -Tasks $migrationTasks
+            }
             Publish-HermesResearchStage $ProgressCallback 'research-stop' '실행 중인 연구팀 서비스와 총괄 채팅을 멈춥니다. 진행 중이던 작업은 재시작 후 다시 이어집니다.' 12
             Stop-HermesResearchService -Plan $servicePlan -Python $python -ServiceScript $serviceScript -ConfigPath $serviceConfig -ResearchRoot $root -Environment $environment
             $leadTasks = @(Get-HermesResearchGatewayTask -TaskName $leadPlan.TaskName)

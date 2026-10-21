@@ -113,7 +113,7 @@ function Read-HermesAdminBotCredential {
 }
 
 function Initialize-HermesAdminBot {
-    param($State,$InputData,[string]$BaseURL,[string]$Token)
+    param($State,$InputData,[string]$BaseURL,[string]$Token,[switch]$DeferChannelMembership)
     $record = New-HermesAdminBotRecord $State $InputData
     $user = $null
     try { $user = (Invoke-HermesAdminAPI -BaseURL $BaseURL -Path ('/api/v4/users/username/' + $record.Username) -Token $Token).Data }
@@ -134,7 +134,8 @@ function Initialize-HermesAdminBot {
     Assert-HermesAdminBotIdentity $State $record $bot $user
     $record.BotId = $bot.user_id
     Save-HermesAdminBotRecord $State $record
-    foreach ($kind in @('teams','channels')) {
+    $membershipKinds = $(if ($DeferChannelMembership) { @('teams') } else { @('teams','channels') })
+    foreach ($kind in $membershipKinds) {
         $targetId = $(if ($kind -eq 'teams') { $State.TeamId } else { $State.ChannelId })
         $memberPath = "/api/v4/$kind/$targetId/members/$($record.BotId)"
         try { $member = (Invoke-HermesAdminAPI -BaseURL $BaseURL -Path $memberPath -Token $Token).Data }
@@ -169,16 +170,16 @@ function Initialize-HermesAdminBot {
     }
     $me = (Invoke-HermesAdminAPI -BaseURL $BaseURL -Path '/api/v4/users/me' -Token $secret.Token).Data
     if ($me.id -cne $record.BotId -or -not $me.is_bot -or $me.delete_at -ne 0 -or $me.roles -cne 'system_user') { throw '발급된 토큰이 일반 봇 계정으로 인증되지 않습니다.' }
-    $null = Invoke-HermesAdminAPI -BaseURL $BaseURL -Path "/api/v4/channels/$($State.ChannelId)/members/$($record.BotId)" -Token $secret.Token
-    $record.TokenId = $secret.TokenId; $record.Status = 'Ready'
+    if (-not $DeferChannelMembership) { $null = Invoke-HermesAdminAPI -BaseURL $BaseURL -Path "/api/v4/channels/$($State.ChannelId)/members/$($record.BotId)" -Token $secret.Token }
+    $record.TokenId = $secret.TokenId; $record.Status = $(if ($DeferChannelMembership) { 'Issued' } else { 'Ready' })
     Save-HermesAdminBotRecord $State $record
     $secret = $null
-    return [pscustomobject]@{ Kind = 'Bot'; Ready = $true; Directory = $State.Directory; DeploymentId = $State.DeploymentId; OperationId = $record.OperationId; ServerURL = (Get-HermesAdminServerURL $State); BotUsername = $record.Username; BotDisplayName = $record.DisplayName; BotId = $record.BotId; TokenId = $record.TokenId; TeamId = $State.TeamId; HomeChannelId = $State.ChannelId; Role = 'system_user'; SecretStorage = 'DPAPI CurrentUser (GUI copy only)' }
+    return [pscustomobject]@{ Kind = 'Bot'; Ready = $true; ChannelJoined = (-not [bool]$DeferChannelMembership); Directory = $State.Directory; DeploymentId = $State.DeploymentId; OperationId = $record.OperationId; ServerURL = (Get-HermesAdminServerURL $State); BotUsername = $record.Username; BotDisplayName = $record.DisplayName; BotId = $record.BotId; TokenId = $record.TokenId; TeamId = $State.TeamId; HomeChannelId = $State.ChannelId; Role = 'system_user'; SecretStorage = 'DPAPI CurrentUser (GUI copy only)' }
 }
 
 function Invoke-HermesAdminBotSetup {
     [CmdletBinding()]
-    param($InputData,[string]$DeploymentRoot = (Get-HermesAdminRoot),[scriptblock]$ProgressCallback)
+    param($InputData,[string]$DeploymentRoot = (Get-HermesAdminRoot),[scriptblock]$ProgressCallback,[switch]$DeferChannelMembership)
     Assert-HermesAdminBotInput $InputData
     $owned = $false; $token = $null; $state = $null
     $mutex = New-Object Threading.Mutex($false,('Local\HermesAdminSetup-' + $InputData.ServerId))
@@ -205,8 +206,8 @@ function Invoke-HermesAdminBotSetup {
         $team = (Invoke-HermesAdminAPI -BaseURL $baseURL -Path "/api/v4/teams/$($state.TeamId)" -Token $token).Data
         $channel = (Invoke-HermesAdminAPI -BaseURL $baseURL -Path "/api/v4/channels/$($state.ChannelId)" -Token $token).Data
         if ($team.name -cne $state.Identity.TeamName -or $team.delete_at -ne 0 -or $channel.team_id -cne $state.TeamId -or $channel.name -cne $state.Identity.ChannelName -or $channel.delete_at -ne 0) { throw '지정한 팀·채널이 설치 기록과 다르거나 삭제되었습니다.' }
-        if ($ProgressCallback) { & $ProgressCallback ([pscustomobject]@{ type = 'stage'; percent = 45; message = '봇 계정·팀·채널 멤버십과 토큰 발급 기록을 확인합니다. 토큰은 로그에 출력하지 않습니다.' }) }
-        $result = Initialize-HermesAdminBot $state $InputData $baseURL $token
+        if ($ProgressCallback) { & $ProgressCallback ([pscustomobject]@{ type = 'stage'; percent = 45; message = '봇 계정과 토큰 발급 기록을 확인합니다. 토큰은 로그에 출력하지 않습니다.' }) }
+        $result = Initialize-HermesAdminBot $state $InputData $baseURL $token -DeferChannelMembership:$DeferChannelMembership
         if ($ProgressCallback) { & $ProgressCallback ([pscustomobject]@{ type = 'complete'; percent = 100; message = '봇과 토큰이 준비되었습니다. 마법사의 토큰 복사 버튼을 사용하세요.'; data = $result }) }
         return $result
     } finally {

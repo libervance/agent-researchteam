@@ -135,6 +135,16 @@ Import-Module (Join-Path (Split-Path -Parent $PSScriptRoot) 'src\HermesEasySetup
         $state.BotCreationPending = $true
         Restore-HermesAdminBotCreation $state 'http://127.0.0.1:18065' 'fixture-admin'
         Assert (-not $script:creationEnabled -and -not $state.BotCreationPending) 'Interrupted owned creation journal is sealed on recovery'
+        $deferredData = $data | ConvertTo-Json | ConvertFrom-Json
+        $deferredData.BotUsername = 'deferred_bot'; $deferredData.BotDisplayName = 'Deferred Bot'
+        $script:remoteUser = $null; $script:remoteBot = $null; $script:tokenList = @(); $script:members = @{}
+        $script:issuedToken = [Guid]::NewGuid().ToString('N').Substring(0,26)
+        $issued = Initialize-HermesAdminBot $state $deferredData 'http://127.0.0.1:18065' 'fixture-admin' -DeferChannelMembership
+        $deferredRecord = New-HermesAdminBotRecord $state $deferredData
+        Assert ($issued.Ready -and -not $issued.ChannelJoined -and $deferredRecord.Status -ceq 'Issued' -and $script:members.ContainsKey('/api/v4/teams/' + $state.TeamId + '/members/' + $issued.BotId) -and -not $script:members.ContainsKey('/api/v4/channels/' + $state.ChannelId + '/members/' + $issued.BotId)) 'Deferred issuance creates a team bot and token without joining the channel'
+        $tokenCount = $script:createdTokens
+        $joined = Initialize-HermesAdminBot $state $deferredData 'http://127.0.0.1:18065' 'fixture-admin'
+        Assert ($joined.ChannelJoined -and $joined.TokenId -ceq $issued.TokenId -and $script:createdTokens -eq $tokenCount -and $script:members.ContainsKey('/api/v4/channels/' + $state.ChannelId + '/members/' + $issued.BotId)) 'Joining later reuses the bot and token without issuing a second token'
         Write-Host ('Admin bot tests passed: ' + $script:passed)
     } finally {
         $expectedPrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\hermes-admin-bot-unit-'

@@ -152,11 +152,11 @@ function Backup-HermesResearchMigration {
     if (-not (Test-HermesSafeTargetPath -LiteralPath $backup).Safe) { throw 'ResearchBackupPathRejected' }
     New-Item -ItemType Directory -Path $backup -ErrorAction Stop | Out-Null
     $files = @()
-    foreach ($name in @('team.json','policy.json','private.json','live-test.json')) {
+    foreach ($name in @('team.json','policy.json','private.json','live-test.json','service.json','workspace-root.txt','private\bots.json','private\service.env','gateway\env','gateway\models.json')) {
         $files += @{ Source = (Join-Path $Paths.RuntimeRoot ('research\' + $name)); Relative = $name }
     }
     foreach ($profile in @($Prior.Profiles)) {
-        foreach ($name in @('.env','config.yaml','SOUL.md','gateway.parked')) {
+        foreach ($name in @('.env','config.yaml','SOUL.md','gateway.parked','.research-team')) {
             $files += @{ Source = (Join-Path $Paths.HermesHome ('profiles\' + $profile.ProfileName + '\' + $name)); Relative = ('profiles\' + $profile.ProfileName + '\' + $name) }
         }
     }
