@@ -329,13 +329,62 @@ def commit_push(repo, msg):
     if not git(repo, "diff", "--cached", "--quiet", check=False).returncode:
         return False
     git(repo, "commit", "-q", "-m", msg)
+    return push_pending(repo)
+
+
+PENDING_PUBLICATION = "refs/research/pending-publication"
+
+
+def resolve_ledger_append(repo):
+    """Resolve only concurrent appends. Never choose one worker's ledger over another."""
+    conflicts = git(repo, "diff", "--name-only", "--diff-filter=U").stdout.splitlines()
+    if conflicts != [LEDGER]:
+        return False
+    def lines_at(spec):
+        r = git(repo, "show", spec, check=False)
+        return r.stdout.splitlines() if r.returncode == 0 else []
+    base = lines_at(f"REBASE_HEAD^:{LEDGER}")
+    ours = lines_at(f":2:{LEDGER}")  # the already published chain
+    theirs = lines_at(f":3:{LEDGER}")  # this worker's original append
+    if (theirs[:len(base)] != base or len(theirs) <= len(base)
+            or any(ledger_check(ls) is not None for ls in (base, ours, theirs))):
+        return False
+    # Earlier commits in this rebase may already have been re-chained around other
+    # workers' entries. Every old record must still exist in order, with all fields
+    # except the link unchanged; a rewritten/deleted historical record is a conflict.
+    def record(line):
+        value = json.loads(line)
+        value.pop("prev", None)
+        return value
+    published = iter(record(line) for line in ours)
+    for line in base:
+        wanted = record(line)
+        if not any(entry == wanted for entry in published):
+            return False
+    # Preserve the remote prefix verbatim; only new, unpublished entries get new prev hashes.
+    wr(Path(repo) / LEDGER, "\n".join(ours) + ("\n" if ours else ""))
+    for line in theirs[len(base):]:
+        ledger_append(repo, json.loads(line))
+    git(repo, "add", "--", LEDGER)
+    return True
+
+
+def push_pending(repo):
+    # A durable ref keeps the original result reachable even across failed rebases/restarts.
+    git(repo, "update-ref", PENDING_PUBLICATION, "HEAD")
     for _ in range(5):
         if not git(repo, "push", "-q", check=False).returncode:
+            git(repo, "update-ref", "-d", PENDING_PUBLICATION)
             return True
-        if git(repo, "pull", "--rebase", "-q", check=False).returncode:
-            git(repo, "rebase", "--abort", check=False)
-            raise RuntimeError("rebase conflict while publishing — resolve by hand")
-    raise RuntimeError("push kept failing")
+        git(repo, "fetch", "-q", "origin")
+        r = git(repo, "rebase", "@{u}", check=False)
+        while r.returncode:
+            if not resolve_ledger_append(repo):
+                git(repo, "rebase", "--abort", check=False)
+                raise RuntimeError("publication pending: conflicting changes; result preserved in "
+                                   + PENDING_PUBLICATION + " (manual resolution required)")
+            r = git(repo, "-c", "core.editor=true", "rebase", "--continue", check=False)
+    raise RuntimeError("publication pending: push failed; committed result preserved for retry")
 
 
 def publish(repo, paths, msg, excludes=()):
@@ -344,8 +393,18 @@ def publish(repo, paths, msg, excludes=()):
     return commit_push(repo, msg)
 
 
-def reset_to_remote(repo):
+def reset_to_remote(repo, discard_claim=False):
+    for name in ("rebase-merge", "rebase-apply"):
+        location = Path(git(repo, "rev-parse", "--git-path", name).stdout.strip())
+        if not location.is_absolute():
+            location = Path(repo) / location
+        if location.exists():
+            raise RuntimeError("publication pending: interrupted rebase; preserved for manual recovery")
     git(repo, "fetch", "-q", "origin")
+    if not discard_claim:
+        # Never wipe a completed but unpublished attempt on the runner's next poll.
+        if git(repo, "rev-list", "--count", "@{u}..HEAD").stdout.strip() != "0":
+            push_pending(repo)
     git(repo, "reset", "-q", "--hard", "@{u}")
     git(repo, "clean", "-fdq")
 
@@ -1318,7 +1377,7 @@ def claim(clone, p, me):
             return True
     except RuntimeError:
         pass
-    reset_to_remote(clone)  # another worker claimed first, or the board moved
+    reset_to_remote(clone, discard_claim=True)  # only discard the rejected claim, never a result
     return False
 
 
@@ -1501,6 +1560,7 @@ def cmd_run(a):
             except RuntimeError as e:
                 print(f"[{now()}] {url}: {e}", file=sys.stderr, flush=True)
         did = False
+        errors = {}
         for url, c in clones.items():
             try:
                 reset_to_remote(c)
@@ -1537,12 +1597,13 @@ def cmd_run(a):
                             execute(a, c, p, me)
                             did = True
                         break
-            except Exception as e:  # keep the loop alive; the board shows what happened
+            except Exception as e:  # keep other projects alive; expose failures to the installer
+                errors[c.name] = {"remote": url, "error": str(e)[:1000], "updated": now()}
                 print(f"[{now()}] {c.name}: {e}", file=sys.stderr, flush=True)
         if a.status_file:
             try:
                 wr(a.status_file, json.dumps({"pid": os.getpid(), "role": a.role, "slot": a.slot, "updated": now(),
-                                              "papers": sorted(c.name for c in clones.values())}))
+                                              "papers": sorted(c.name for c in clones.values()), "errors": errors}))
             except OSError:
                 pass
         if a.once and not did:

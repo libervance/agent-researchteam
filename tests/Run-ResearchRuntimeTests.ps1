@@ -10,6 +10,8 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
 # The installer end to end with every process, network, ACL and Task Scheduler boundary
 # replaced: it never starts Hermes, Python, a model, a request or a task.
 & (Get-Module HermesEasySetup.ResearchRuntime) {
+    param([string]$projectRoot)
+    $ErrorActionPreference = 'Stop'
     $script:passed = 0
     function Assert { param($Ok, [string]$Name) if (-not $Ok) { throw $Name }; $script:passed++; Write-Host "PASS $Name" }
     function Reject {
@@ -48,8 +50,8 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
         return [pscustomobject]@{ SchemaVersion = 2; ServerURL = 'http://127.0.0.1:8065/'; HomeChannelID = 'c' * 26; Model = $model; WizardOptions = $options; Agents = $agents }
     }
     function Invoke-Setup {
-        param($Paths, $InputObject, [switch]$Resume)
-        return Invoke-HermesResearchTeamSetup -InputObject $InputObject -HermesHome $Paths.HermesHome -InstallDir $Paths.InstallDir -RuntimeRoot $Paths.RuntimeRoot -ReuseExistingProfiles:$Resume
+        param($Paths, $InputObject, [switch]$Resume, [scriptblock]$ProgressCallback)
+        return Invoke-HermesResearchTeamSetup -InputObject $InputObject -HermesHome $Paths.HermesHome -InstallDir $Paths.InstallDir -RuntimeRoot $Paths.RuntimeRoot -ReuseExistingProfiles:$Resume -ProgressCallback $ProgressCallback
     }
     function Read-Env { param([string]$Path) $v = @{}; foreach ($l in [IO.File]::ReadAllLines($Path)) { if ($l -match '^([A-Za-z_0-9-]+)=(.*)$') { $v[$Matches[1]] = $Matches[2] } }; return $v }
 
@@ -84,7 +86,7 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
         return [pscustomobject]@{ StatusCode = 200; Content = ($body | ConvertTo-Json -Compress) }
     }
     function script:Invoke-HermesProcess {
-        param($FilePath, $ArgumentList, $Environment, $TimeoutSeconds, $WorkingDirectory)
+        param($FilePath, $ArgumentList, $Environment, $TimeoutSeconds, $WorkingDirectory, $OutputLineCallback)
         $args = @($ArgumentList | ForEach-Object { [string]$_ })
         $script:processes.Add([pscustomobject]@{ FilePath = [string]$FilePath; Arguments = $args; Environment = $Environment })
         $ok = { param([string]$Out = '') [pscustomobject]@{ Started = $true; TimedOut = $false; ExitCode = 0; StdOut = $Out; StdErr = '' } }
@@ -121,6 +123,7 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
             return & $ok 'stop requested'
         }
         if ($args[0] -ceq '-B' -and $args[1] -like '*team_selftest.py') {
+            if ($null -ne $OutputLineCallback) { & $OutputLineCallback 'StdOut' 'SELFTEST_PROGRESS research-writer: done' }
             $answer = [ordered]@{ passed = [bool]$script:selftestPassed; live = $true; folder = 'C:\ws\_selftest-1'; ledger_intact = $true; delivered = [bool]$script:selftestPassed; lead = 'done'; error = $(if ($script:selftestPassed) { $null } else { 'roles not done' })
                 roles = [ordered]@{ 'research-librarian' = 'done'; 'research-reviewer' = $(if ($script:selftestPassed) { 'done' } else { 'blocked' }); 'research-writer' = 'done'; 'research-experimenter' = 'done' } }
             return [pscustomobject]@{ Started = $true; TimedOut = $false; ExitCode = $(if ($script:selftestPassed) { 0 } else { 1 }); StdOut = ($answer | ConvertTo-Json -Compress -Depth 4); StdErr = '' }
@@ -154,7 +157,9 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
         # --- A fresh install with the router ---
         $paths = New-FixturePaths 'fresh 한글 경로'
         $teamInput = New-Input $paths
-        $result = Invoke-Setup $paths $teamInput
+        $events = New-Object System.Collections.Generic.List[object]
+        $result = Invoke-Setup $paths $teamInput -ProgressCallback { param($event) $events.Add($event) }.GetNewClosure()
+        Assert (@($events | Where-Object { $_.message -ceq 'research-writer: done' }).Count -eq 1) 'Live test streams role status into installer progress'
         $research = Join-Path $paths.RuntimeRoot 'research'
         Assert ($result.Succeeded -and $result.ExecutionReady -and $result.WorkflowTest.Passed -and $result.WorkflowTest.Roles.Count -eq 5) 'Fresh install passes the live five-role test'
         $creates = @($script:processes | Where-Object { $_.Arguments.Count -eq 4 -and $_.Arguments[0] -ceq 'profile' -and $_.Arguments[1] -ceq 'create' })
@@ -320,5 +325,5 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
         if (Test-Path -LiteralPath $script:fixtureRoot) { Remove-Item -LiteralPath $script:fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue }
     }
     Write-Host "PASS research team installer ($script:passed assertions)" -ForegroundColor Green
-}
+} $projectRoot
 exit 0

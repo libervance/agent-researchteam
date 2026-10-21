@@ -222,11 +222,18 @@ function Invoke-HermesResearchSelfTest {
     <# The live end-to-end test (team_selftest.py): every role does one small real task through
        the running service, the lead answers through its own profile, delivery and ledger verified. #>
     param([string]$ResearchRoot, [string]$Python, [hashtable]$Environment, [string]$WorkspacePath, [string]$ChannelID,
-          [string]$CommandPath, [string]$Mention, [int]$TimeoutSeconds = 1500)
+          [string]$CommandPath, [string]$Mention, [int]$TimeoutSeconds = 1500, [AllowNull()][scriptblock]$ProgressCallback)
     $evidence = Join-Path $ResearchRoot 'live-test.json'
     $test = [ordered]@{ Passed = $false; Live = $false; RequestID = ''; Roles = @(); AuditPassed = $false; EvidencePath = $evidence; ErrorCode = 'LiveTestNotPassed'; Detail = '' }
     $script = Join-Path $ResearchRoot 'team\shared\team_selftest.py'
-    $result = Invoke-HermesProcess -FilePath $Python -ArgumentList @('-B', $script, '--workspace', $WorkspacePath, '--channel', $ChannelID, '--hermes', $CommandPath, '--mention', $Mention, '--timeout', [string]$TimeoutSeconds) -WorkingDirectory $WorkspacePath -Environment $Environment -TimeoutSeconds ($TimeoutSeconds + 1200)
+    $publishStage = ${function:Publish-HermesResearchStage}
+    $onLine = {
+        param($stream, $line)
+        if ($stream -eq 'StdOut' -and $line.StartsWith('SELFTEST_PROGRESS ')) {
+            & $publishStage $ProgressCallback 'research-live-test' $line.Substring(18) 82
+        }
+    }.GetNewClosure()
+    $result = Invoke-HermesProcess -FilePath $Python -ArgumentList @('-B', $script, '--workspace', $WorkspacePath, '--channel', $ChannelID, '--hermes', $CommandPath, '--mention', $Mention, '--timeout', [string]$TimeoutSeconds) -WorkingDirectory $WorkspacePath -Environment $Environment -TimeoutSeconds ($TimeoutSeconds + 1200) -OutputLineCallback $onLine
     if (-not $result.Started -or $result.TimedOut) { $test.ErrorCode = 'LiveTestTimeout'; return [pscustomobject]$test }
     try {
         $answer = $result.StdOut.Trim().Split("`n")[-1] | ConvertFrom-Json

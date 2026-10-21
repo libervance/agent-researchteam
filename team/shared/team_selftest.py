@@ -22,6 +22,8 @@ import sys
 import time
 from pathlib import Path
 
+import research_board as rb
+
 HERE = Path(__file__).resolve().parent
 BOARD = HERE / "research_board.py"
 RUNNER_ROLES = ["research-librarian", "research-reviewer", "research-writer", "research-experimenter"]
@@ -53,7 +55,8 @@ TASKS = [
 
 
 def board(*args, cwd, check=True):
-    r = sp.run([sys.executable, str(BOARD), *args], cwd=cwd, capture_output=True, encoding="utf-8", errors="replace")
+    r = sp.run([sys.executable, str(BOARD), *args], cwd=cwd, capture_output=True,
+               encoding="utf-8", errors="replace", timeout=120)
     if check and r.returncode:
         raise RuntimeError(f"research_board {args[0]}: {(r.stderr or r.stdout).strip()[-500:]}")
     return r
@@ -62,6 +65,37 @@ def board(*args, cwd, check=True):
 def status_of(folder, ws):
     out = board("list", str(folder), cwd=ws).stdout
     return {line.split()[0]: line.split()[1] for line in out.splitlines() if line.strip() and not line.startswith("(")}
+
+
+def runner_errors(folder, home):
+    """Only errors for this test board, never an unrelated project or old test."""
+    remote = rb.git(folder, "remote", "get-url", "origin").stdout.strip()
+    errors = []
+    for path in (home / "run").glob("research-*.json"):
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+            if time.time() - path.stat().st_mtime > 180:
+                continue
+            for error in state.get("errors", {}).values():
+                if error.get("remote") == remote:
+                    errors.append(f"{state.get('role')}: {error['error']}")
+        except (OSError, ValueError, TypeError, KeyError):
+            continue  # a runner may be replacing its heartbeat
+    return errors
+
+
+def terminal_failure(folder):
+    for tid, (_, meta, _) in rb.tasks(folder).items():
+        status = meta.get("status")
+        if status in ("blocked", "failed") or (status == "partial" and
+                (meta.get("resume_policy") != "auto" or
+                 int(meta.get("attempt") or 0) >= int(meta.get("max_attempts") or 1))):
+            return f"{tid}: {status} — {meta.get('stop_reason', '')}"
+    return ""
+
+
+def progress(message):
+    print("SELFTEST_PROGRESS " + message, flush=True)
 
 
 def main():
@@ -89,16 +123,27 @@ def main():
             args += ["--deliver", deliver] if deliver else []
             board(*args, cwd=ws)
         deadline = time.time() + a.timeout
+        previous = None
         while True:
             st = status_of(folder, ws)
             result["roles"] = {role: st.get(tid, "missing") for tid, role, *_ in TASKS}
-            if all(s in ("done", "blocked", "failed") for s in result["roles"].values()) or time.time() > deadline:
+            if result["roles"] != previous:
+                progress("; ".join(f"{role}: {status}" for role, status in result["roles"].items()))
+                previous = dict(result["roles"])
+            failure = terminal_failure(folder)
+            if failure:
+                raise RuntimeError(f"worker stopped: {failure}")
+            errors = runner_errors(folder, rb.TEAM_HOME)
+            if errors:
+                raise RuntimeError("board publication/runner error; saved outputs retained: " + "; ".join(errors))
+            if all(s == "done" for s in result["roles"].values()) or time.time() > deadline:
                 break
             time.sleep(20)
         if not all(s == "done" for s in result["roles"].values()):
             bad = {r: s for r, s in result["roles"].items() if s != "done"}
             raise RuntimeError(f"roles not done: {bad}" + (" (timed out)" if time.time() > deadline else ""))
         # The lead: its own profile, its skill placeholders and its terminal, one question.
+        progress("Four worker results saved. Checking research-lead (up to 15 minutes).")
         q = folder.parent / ".scratch" / "selftest-lead.md"
         q.parent.mkdir(exist_ok=True)
         q.write_text(f"Installation check. Using your board command, list the tasks of `{folder.name}` and "
@@ -109,6 +154,7 @@ def main():
             f"failed (exit {r.returncode}): {(r.stdout + r.stderr).strip()[-300:]}"
         if result["lead"] != "done":
             raise RuntimeError(f"research-lead: {result['lead']}")
+        progress("Checking the completion ledger and Mattermost attachment delivery.")
         result["ledger_intact"] = board("ledger", str(folder), "--verify", cwd=ws, check=False).returncode == 0
         # The reviewer's runner already attached its note; deliver it once more as the lead and
         # require the verified round trip here, where the result is visible.

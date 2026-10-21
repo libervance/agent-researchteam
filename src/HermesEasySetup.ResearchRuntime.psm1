@@ -528,10 +528,10 @@ function Invoke-HermesResearchTeamSetup {
         Start-HermesResearchGatewayTask -Plan $leadPlan
         Wait-HermesResearchGatewayReady -CommandPath $command -ProfileName 'research-lead' -Environment $environment -Plan $leadPlan -TimeoutSeconds 90
 
-        Publish-HermesResearchStage $ProgressCallback 'research-live-test' '실제 모델·봇으로 다섯 역할이 각각 작은 작업을 하고 결과 전달·기록을 확인합니다. 10~25분 걸릴 수 있습니다.' 80
+        Publish-HermesResearchStage $ProgressCallback 'research-live-test' '실제 모델·봇 작업과 기록·전달을 확인합니다. 작업자 확인은 최대 25분, 이후 총괄 확인은 최대 15분입니다. 아래에 역할별 상태를 표시합니다.' 80
         $testEnv = @{} + $environment
         $testEnv['MATTERMOST_URL'] = $summary.ServerURL; $testEnv['MATTERMOST_TOKEN'] = $tokens['research-lead']
-        $workflowTest = Invoke-HermesResearchSelfTest -ResearchRoot $root -Python $python -Environment $testEnv -WorkspacePath $options.WorkspacePath -ChannelID $summary.HomeChannelID -CommandPath $command -Mention $mention
+        $workflowTest = Invoke-HermesResearchSelfTest -ResearchRoot $root -Python $python -Environment $testEnv -WorkspacePath $options.WorkspacePath -ChannelID $summary.HomeChannelID -CommandPath $command -Mention $mention -ProgressCallback $ProgressCallback
         $pending = @()
         if (-not $workflowTest.Passed) { $pending += ('실제 다섯 역할 테스트 미통과: ' + $workflowTest.ErrorCode + $(if ($workflowTest.Detail) { ' — ' + $workflowTest.Detail } else { '' })) }
         return [pscustomobject]@{
