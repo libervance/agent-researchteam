@@ -219,7 +219,13 @@ function Install-HermesResearchWorkspace {
     }
     foreach ($arguments in @(@('init', $reports), @('setup', $reports, '--channel', $ChannelID, '--mention', $Mention))) {
         $result = Invoke-HermesProcess -FilePath $Python -ArgumentList (@('-B', $board) + $arguments) -WorkingDirectory $WorkspacePath -Environment $Environment -TimeoutSeconds 120
-        if (-not $result.Started -or $result.TimedOut -or $result.ExitCode -ne 0) { throw ('ResearchReportsBoard' + $arguments[0] + 'Failed') }
+        if (-not $result.Started -or $result.TimedOut -or $result.ExitCode -ne 0) {
+            $detail = [string]$result.StdErr
+            foreach ($value in $Environment.Values) { if ($value -and ([string]$value).Length -ge 12) { $detail = $detail.Replace([string]$value,'[redacted]') } }
+            $detail = Protect-HermesLogText $detail
+            if ($detail.Length -gt 2000) { $detail = $detail.Substring($detail.Length - 2000) }
+            throw ('ResearchReportsBoard' + $arguments[0] + 'Failed: ' + $(if ($result.TimedOut) { '시간 초과' } elseif ($detail.Trim()) { $detail.Trim() } else { '작업 프로세스를 실행하지 못했습니다.' }))
+        }
     }
     return $reports
 }

@@ -108,6 +108,21 @@ Import-Module (Join-Path (Split-Path -Parent $PSScriptRoot) 'src\HermesEasySetup
         Assert ($first.BotId -ceq $again.BotId -and $first.TokenId -ceq $again.TokenId) 'Same bot and token IDs returned on retry'
         $secret = Read-HermesAdminBotCredential $first
         Assert ($secret.Token -ceq $script:issuedToken) 'GUI credential handoff validates operation and IDs'
+        Assert (-not $first.TokenReused -and $again.TokenReused) 'Creation and reuse are distinguished in public results'
+        $state.Status = 'Ready'
+        Write-HermesAdminJSON (Join-Path $state.Directory 'deployment.json') $state
+        $recordHash = (Get-FileHash -LiteralPath (Join-Path $state.Directory 'bots\unit_bot.json')).Hash
+        $secretHash = (Get-FileHash -LiteralPath (Join-Path $state.Directory 'bots\unit_bot.bin')).Hash
+        $recovered = Read-HermesAdminSavedBotConnection -ServerId $data.ServerId -ServerURL 'http://127.0.0.1:18065' -HomeChannelID $state.ChannelId -BotUsername 'unit_bot' -DeploymentRoot $root
+        Assert ($recovered.Token -ceq $secret.Token -and $recovered.ChannelJoined -and $recovered.DisplayName -ceq $data.BotDisplayName) 'Existing bot connection restored without a completed research team'
+        Assert ($recordHash -ceq (Get-FileHash -LiteralPath (Join-Path $state.Directory 'bots\unit_bot.json')).Hash -and $secretHash -ceq (Get-FileHash -LiteralPath (Join-Path $state.Directory 'bots\unit_bot.bin')).Hash -and $script:createdTokens -eq 1) 'Read-only recovery leaves bot records and credentials unchanged'
+        Reject { Read-HermesAdminSavedBotConnection -ServerId $data.ServerId -ServerURL 'http://127.0.0.1:19999' -HomeChannelID $state.ChannelId -BotUsername 'unit_bot' -DeploymentRoot $root } 'Recovery rejects a different server'
+        Reject { Read-HermesAdminSavedBotConnection -ServerId $data.ServerId -ServerURL 'http://127.0.0.1:18065' -HomeChannelID ('z'*26) -BotUsername 'unit_bot' -DeploymentRoot $root } 'Recovery rejects a different channel'
+        $vault = Join-Path $state.Directory 'bots\unit_bot.bin'
+        Move-Item -LiteralPath $vault -Destination ($vault + '.saved')
+        try {
+            Reject { Read-HermesAdminSavedBotConnection -ServerId $data.ServerId -ServerURL 'http://127.0.0.1:18065' -HomeChannelID $state.ChannelId -BotUsername 'unit_bot' -DeploymentRoot $root } 'Missing issued credential blocks recovery instead of issuing again'
+        } finally { Move-Item -LiteralPath ($vault + '.saved') -Destination $vault }
         Assert (-not ($first | ConvertTo-Json).Contains($secret.Token)) 'Public result has no token secret'
         Assert (-not [IO.File]::ReadAllText((Join-Path $state.Directory 'bots\unit_bot.json')).Contains($secret.Token)) 'Bot metadata has no token secret'
         $mismatch = $first | ConvertTo-Json | ConvertFrom-Json; $mismatch.OperationId = '0'*32
@@ -140,11 +155,15 @@ Import-Module (Join-Path (Split-Path -Parent $PSScriptRoot) 'src\HermesEasySetup
         $script:remoteUser = $null; $script:remoteBot = $null; $script:tokenList = @(); $script:members = @{}
         $script:issuedToken = [Guid]::NewGuid().ToString('N').Substring(0,26)
         $issued = Initialize-HermesAdminBot $state $deferredData 'http://127.0.0.1:18065' 'fixture-admin' -DeferChannelMembership
+        $recovered = Read-HermesAdminSavedBotConnection -ServerId $data.ServerId -ServerURL 'http://127.0.0.1:18065' -HomeChannelID $state.ChannelId -BotUsername 'deferred_bot' -DeploymentRoot $root
+        Assert ($recovered.Token -ceq $script:issuedToken -and -not $recovered.ChannelJoined) 'Unjoined bot credential restored without losing pending channel membership'
         $deferredRecord = New-HermesAdminBotRecord $state $deferredData
         Assert ($issued.Ready -and -not $issued.ChannelJoined -and $deferredRecord.Status -ceq 'Issued' -and $script:members.ContainsKey('/api/v4/teams/' + $state.TeamId + '/members/' + $issued.BotId) -and -not $script:members.ContainsKey('/api/v4/channels/' + $state.ChannelId + '/members/' + $issued.BotId)) 'Deferred issuance creates a team bot and token without joining the channel'
         $tokenCount = $script:createdTokens
         $joined = Initialize-HermesAdminBot $state $deferredData 'http://127.0.0.1:18065' 'fixture-admin'
         Assert ($joined.ChannelJoined -and $joined.TokenId -ceq $issued.TokenId -and $script:createdTokens -eq $tokenCount -and $script:members.ContainsKey('/api/v4/channels/' + $state.ChannelId + '/members/' + $issued.BotId)) 'Joining later reuses the bot and token without issuing a second token'
+        $rechecked = Initialize-HermesAdminBot $state $deferredData 'http://127.0.0.1:18065' 'fixture-admin' -DeferChannelMembership
+        Assert ($rechecked.TokenReused -and $rechecked.ChannelJoined -and $script:createdTokens -eq $tokenCount) 'Deferred recheck preserves previously completed channel membership'
         Write-Host ('Admin bot tests passed: ' + $script:passed)
     } finally {
         $expectedPrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\hermes-admin-bot-unit-'

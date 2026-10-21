@@ -61,6 +61,7 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
     $script:multiplex = 'off'
     $script:selftestPassed = $true
     $script:serviceGatewayOK = $true
+    $script:failBoardInit = $false
 
     function script:Test-HermesInstallation {
         param($HermesHome, $InstallDir, $RuntimeRoot, $LogPath)
@@ -107,11 +108,18 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
         if ($args[0] -ceq '-c' -and $args[1] -match 'importlib.metadata') { return & $ok '1.105.1' }
         if ($args[0] -like '*render_config.py') { [IO.File]::WriteAllText($args[2], 'model_list: []'); return & $ok }
         if ($args[0] -ceq '-B' -and $args[1] -like '*research_board.py') {
+            if ($args[2] -ceq 'init' -and $script:failBoardInit) { return [pscustomobject]@{ Started=$true; TimedOut=$false; ExitCode=1; StdOut=''; StdErr=('Git fixture failed; token=' + ('a'*26)) } }
             if ($args[2] -ceq 'init') { New-Item -ItemType Directory -Path (Join-Path $args[3] '.git') -Force | Out-Null }
             if ($args[2] -ceq 'locations') { [IO.File]::WriteAllText((Join-Path $args[4] 'RESEARCH_PATHS.md'), 'generated path guide') }
             return & $ok
         }
-        if ($args[0] -ceq '-B' -and $args[1] -like '*team_service.py') { return & $ok 'stop requested' }
+        if ($args[0] -ceq '-B' -and $args[1] -like '*team_service.py') {
+            if ($args[2] -ceq 'stop') {
+                $config = [IO.File]::ReadAllText($args[4]) | ConvertFrom-Json
+                [IO.File]::WriteAllText((Join-Path $config.team_home 'service-status.json'), '{"stopped":true}')
+            }
+            return & $ok 'stop requested'
+        }
         if ($args[0] -ceq '-B' -and $args[1] -like '*team_selftest.py') {
             $answer = [ordered]@{ passed = [bool]$script:selftestPassed; live = $true; folder = 'C:\ws\_selftest-1'; ledger_intact = $true; delivered = [bool]$script:selftestPassed; lead = 'done'; error = $(if ($script:selftestPassed) { $null } else { 'roles not done' })
                 roles = [ordered]@{ 'research-librarian' = 'done'; 'research-reviewer' = $(if ($script:selftestPassed) { 'done' } else { 'blocked' }); 'research-writer' = 'done'; 'research-experimenter' = 'done' } }
@@ -288,6 +296,26 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
         $updated = Invoke-Setup $paths $normalUpdateInput -Resume
         Assert ($updated.Succeeded -and $updated.MigrationBackupPath -like '*migrations*' -and @($script:migrationCalls | Where-Object { $_ -ceq 'backup' }).Count -eq ($beforeBackup + 1)) 'Normal five-role update backs up obsolete configuration without beta consent'
         Assert (([IO.File]::ReadAllText($fiveStatePath) | ConvertFrom-Json).InstallerVersion -ceq [IO.File]::ReadAllText((Join-Path $projectRoot 'VERSION')).Trim()) 'Updated team records the installer version'
+        foreach ($legacyWindow in @($false,$true)) {
+            $partialPaths = New-FixturePaths ('interrupted-' + $legacyWindow)
+            $partialInput = New-Input $partialPaths -Mode Codex
+            $script:failBoardInit = $true
+            Reject { Invoke-Setup $partialPaths $partialInput } 'Board failure is actionable and does not expose a token' 'Git fixture failed'
+            $partialStatePath = Join-Path $partialPaths.RuntimeRoot 'research\team.json'
+            $partialState = [IO.File]::ReadAllText($partialStatePath) | ConvertFrom-Json
+            Assert ($partialState.SetupStatus -ceq 'Installing' -and (Test-Path -LiteralPath (Join-Path $partialPaths.RuntimeRoot 'research\private\bots.json'))) 'Ownership and bot credentials persist before board initialization'
+            $beforeCreates = @($script:processes | Where-Object { $_.Arguments[0] -ceq 'profile' }).Count
+            if ($legacyWindow) {
+                Remove-Item -LiteralPath $partialStatePath
+                $recovery = Get-HermesResearchInterruptedTeam -Paths $partialPaths -ServerURL $partialInput.ServerURL -HomeChannelID $partialInput.HomeChannelID -LeadToken $partialInput.Agents[0].BotToken
+                Assert ($recovery.TeamID -ceq $partialState.TeamID) 'Pre-fix interrupted installation is recognized by matching ownership and lead connection'
+                Reject { Get-HermesResearchInterruptedTeam -Paths $partialPaths -ServerURL 'http://127.0.0.1:19999' -HomeChannelID $partialInput.HomeChannelID } 'Recovery refuses profiles connected to another server'
+                Reject { Get-HermesResearchInterruptedTeam -Paths $partialPaths -ServerURL $partialInput.ServerURL -HomeChannelID $partialInput.HomeChannelID -LeadToken ('z'*26) } 'Recovery refuses a different lead credential'
+            }
+            $script:failBoardInit = $false
+            $retryResult = Invoke-Setup $partialPaths $partialInput -Resume
+            Assert ($retryResult.Succeeded -and ([IO.File]::ReadAllText($partialStatePath) | ConvertFrom-Json).TeamID -ceq $partialState.TeamID -and @($script:processes | Where-Object { $_.Arguments[0] -ceq 'profile' }).Count -eq $beforeCreates) 'Retry preserves team identity and creates no duplicate profiles'
+        }
     } finally {
         if (Test-Path -LiteralPath $script:fixtureRoot) { Remove-Item -LiteralPath $script:fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue }
     }

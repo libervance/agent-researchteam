@@ -210,7 +210,7 @@ function Wait-HermesResearchGatewayReady {
 function Get-HermesResearchPriorTeam {
     <# -> $null (fresh), or the recorded team with Kind 'Team' (this team, v2) or 'Broker' (the earlier governed broker). #>
     param([string]$StatePath, $Paths, [string]$OwnerSID, [string]$ServerURL, [string]$HomeChannelID)
-    if (-not (Test-Path -LiteralPath $StatePath)) { return $null }
+    if (-not (Test-Path -LiteralPath $StatePath)) { return Get-HermesResearchInterruptedTeam -Paths $Paths -ServerURL $ServerURL -HomeChannelID $HomeChannelID }
     try {
         if (-not (Test-HermesSafeTargetPath -LiteralPath $StatePath).Safe -or (Get-Item -LiteralPath $StatePath).Length -gt 262144) { throw 'Unsafe' }
         $prior = [IO.File]::ReadAllText($StatePath, [Text.Encoding]::UTF8) | ConvertFrom-Json
@@ -222,6 +222,47 @@ function Get-HermesResearchPriorTeam {
         $prior | Add-Member NoteProperty StateSha256 (ConvertTo-HermesSha256 -LiteralPath $StatePath) -Force
         return $prior
     } catch { throw '기존 연구팀 기록의 소유자·경로·서버·채널이 지금 설정과 다릅니다. 기록은 변경하지 않았습니다.' }
+}
+
+function Get-HermesResearchInterruptedTeam {
+    # Recover the pre-0.14.3 failure window: all profiles were configured before
+    # team.json was written. Names alone are never sufficient proof of ownership.
+    param($Paths,[string]$ServerURL,[string]$HomeChannelID,[string]$LeadToken)
+    $roles = @(New-HermesResearchDefaultAgents | ForEach-Object ProfileName)
+    $existing = @($roles | Where-Object { Test-Path -LiteralPath (Join-Path $Paths.HermesHome ('profiles\' + $_)) })
+    if ($existing.Count -eq 0) { return $null }
+    $root = Join-Path $Paths.RuntimeRoot 'research'
+    $recordPath = Join-Path $root 'team\shared\team-home.txt'
+    if ($existing.Count -ne 5 -or -not (Test-HermesSafeTargetPath -LiteralPath $recordPath).Safe -or -not (Test-Path -LiteralPath $recordPath -PathType Leaf) -or
+        [IO.File]::ReadAllText($recordPath).Trim() -ine $root) { throw ('기존 연구 프로필의 설치 소유 기록을 확인하지 못했습니다: ' + ($existing -join ', ') + '. 같은 설치 경로인지 확인하세요. 기존 프로필은 변경하지 않습니다.') }
+    $teamID = $null
+    foreach ($role in $roles) {
+        $marker = Join-Path $Paths.HermesHome ('profiles\' + $role + '\.research-team')
+        if (-not (Test-HermesSafeTargetPath -LiteralPath $marker).Safe -or -not (Test-Path -LiteralPath $marker -PathType Leaf) -or (Get-Item -LiteralPath $marker).Length -gt 1024) { throw 'ResearchInterruptedProfileMarkerMissing' }
+        $text = [IO.File]::ReadAllText($marker,[Text.Encoding]::UTF8)
+        if ($text -cnotmatch '\Acreated-by=Hermes Easy Setup research team\r?\nteam=([a-f0-9]{32})\s*\z') { throw 'ResearchInterruptedProfileMarkerRejected' }
+        $id = $Matches[1]
+        if ($teamID -and $teamID -cne $id) { throw 'ResearchInterruptedProfilesBelongToDifferentTeams' }
+        $teamID = $id
+    }
+    $envPath = Join-Path $Paths.HermesHome 'profiles\research-lead\.env'
+    if (-not (Test-HermesSafeTargetPath -LiteralPath $envPath).Safe -or -not (Test-Path -LiteralPath $envPath -PathType Leaf) -or (Get-Item -LiteralPath $envPath).Length -gt 65536) { throw 'ResearchInterruptedLeadConnectionMissing' }
+    $values = @{}
+    foreach ($line in [IO.File]::ReadAllLines($envPath,[Text.Encoding]::UTF8)) { if ($line -match '^(MATTERMOST_URL|MATTERMOST_HOME_CHANNEL|MATTERMOST_TOKEN)=(.*)$') { $values[$Matches[1]] = $Matches[2] } }
+    if ([string]$values['MATTERMOST_URL'] -cne $ServerURL.TrimEnd('/') -or [string]$values['MATTERMOST_HOME_CHANNEL'] -cne $HomeChannelID -or
+        [string]$values['MATTERMOST_TOKEN'] -cnotmatch '^[a-z0-9]{26}$' -or ($LeadToken -and $values['MATTERMOST_TOKEN'] -cne $LeadToken)) { throw '중단된 연구팀의 서버·채널·총괄 인증이 다릅니다. 기존 프로필은 변경하지 않습니다.' }
+    return [pscustomobject]@{ Kind = 'Interrupted'; TeamID = $teamID }
+}
+
+function Add-HermesResearchToolPaths {
+    param([hashtable]$Environment)
+    $git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $git) { throw 'git을 찾을 수 없습니다. Git for Windows를 설치한 뒤 다시 실행하세요.' }
+    $directories = @([string]$Environment['PATH'])
+    $directories += Split-Path -Parent $git.Source
+    $latex = Get-Command latexmk -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -ne $latex) { $directories += Split-Path -Parent $latex.Source }
+    $Environment['PATH'] = $directories -join ';'
 }
 
 function Test-HermesResearchMultiplexer {
@@ -304,7 +345,9 @@ function Invoke-HermesResearchTeamSetup {
         if (@($codex.Models) -cnotcontains [string]$summary.Model.CodexModel) { throw '선택한 OpenAI Codex 모델을 현재 인증에서 확인할 수 없습니다.' }
     }
     Test-HermesResearchMultiplexer -Python $python -Paths $paths -Environment $environment
-    if ($null -eq (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) { throw 'git을 찾을 수 없습니다. Git for Windows를 설치하고 PATH에 추가한 뒤 다시 실행하세요. 연구팀의 작업 보드는 git 저장소입니다.' }
+    Add-HermesResearchToolPaths -Environment $environment
+    $gitCheck = Invoke-HermesProcess -FilePath $python -ArgumentList @('-B','-c','import subprocess; subprocess.run(["git", "--version"], check=True, capture_output=True)') -Environment $environment -TimeoutSeconds 30
+    if (-not $gitCheck.Started -or $gitCheck.TimedOut -or $gitCheck.ExitCode -ne 0) { throw '연구 작업 프로세스에서 Git을 실행할 수 없습니다. Git for Windows 설치와 실행 경로를 확인하세요. 프로필은 아직 변경하지 않았습니다.' }
     $notes = @()
     if ($null -eq (Get-Command latexmk -CommandType Application -ErrorAction SilentlyContinue)) { $notes += 'TeX(latexmk)를 찾지 못했습니다. 원고 PDF 빌드가 필요한 집필 작업은 보류됩니다. MiKTeX 또는 TeX Live를 설치하면 바로 사용할 수 있습니다.' }
     $payload = Get-HermesResearchTeamPayload
@@ -321,6 +364,7 @@ function Invoke-HermesResearchTeamSetup {
     $root = Join-Path $paths.RuntimeRoot 'research'
     $statePath = Join-Path $root 'team.json'
     $prior = Get-HermesResearchPriorTeam -StatePath $statePath -Paths $paths -OwnerSID $owner -ServerURL $summary.ServerURL -HomeChannelID $summary.HomeChannelID
+    if ($null -ne $prior -and $prior.Kind -ceq 'Interrupted') { $prior = Get-HermesResearchInterruptedTeam -Paths $paths -ServerURL $summary.ServerURL -HomeChannelID $summary.HomeChannelID -LeadToken $tokens['research-lead'] }
     $obsoleteTeam = ($null -ne $prior -and $prior.Kind -ceq 'Team' -and (-not $prior.PSObject.Properties['PayloadManifestSha256'] -or [string]$prior.PayloadManifestSha256 -cne [string]$payload.ManifestSha256))
     if ($null -ne $prior -and $prior.Kind -ceq 'Team' -and -not $ReuseExistingProfiles -and -not ($obsoleteTeam -and $options.MigrationConsent)) { throw '이 PC에 이미 연구팀이 있습니다. 같은 팀을 갱신하려면 「연구팀 재설정」을 선택하세요. 오래된 5역할 팀 교체는 베타 실험 동의가 필요합니다.' }
     if ($null -ne $prior -and $prior.Kind -ceq 'Broker' -and -not $options.MigrationConsent) { throw '이전 4역할 연구팀(분배 서비스)이 있습니다. 베타 실험용 「기존 연구팀 교체」에 동의하면 기록을 보존한 채 새 팀으로 바꿉니다.' }
@@ -347,7 +391,13 @@ function Invoke-HermesResearchTeamSetup {
     $migrationBackup = $null
     try {
         $lock = [IO.File]::Open((Join-Path $root 'team.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
-        if (($null -eq $prior -and (Test-Path -LiteralPath $statePath)) -or ($null -ne $prior -and (ConvertTo-HermesSha256 -LiteralPath $statePath) -cne $prior.StateSha256)) { throw '사전 검사 이후 연구팀 기록이 바뀌었습니다. 다시 확인하세요.' }
+        if ($null -eq $prior -or $prior.Kind -ceq 'Interrupted') {
+            if (Test-Path -LiteralPath $statePath) { throw '사전 검사 이후 연구팀 기록이 바뀌었습니다. 다시 확인하세요.' }
+            if ($null -ne $prior) {
+                $rechecked = Get-HermesResearchInterruptedTeam -Paths $paths -ServerURL $summary.ServerURL -HomeChannelID $summary.HomeChannelID -LeadToken $tokens['research-lead']
+                if ($rechecked.TeamID -cne $prior.TeamID) { throw 'ResearchInterruptedTeamChanged' }
+            }
+        } elseif ((ConvertTo-HermesSha256 -LiteralPath $statePath) -cne $prior.StateSha256) { throw '사전 검사 이후 연구팀 기록이 바뀌었습니다. 다시 확인하세요.' }
         $serviceConfig = Join-Path $root 'service.json'
         $serviceScript = Join-Path $root 'team\shared\team_service.py'
         if ($null -ne $prior -and $prior.Kind -ceq 'Team') {
@@ -375,10 +425,29 @@ function Invoke-HermesResearchTeamSetup {
             Exit-HermesResearchMaintenance -ResearchRoot $root
         }
 
-        Publish-HermesResearchStage $ProgressCallback 'research-files' '검증된 연구팀 구성 파일을 설치합니다.' 18
-        $teamRoot = Install-HermesResearchTeamFiles -Payload $payload -ResearchRoot $root
+        # Persist ownership and credentials before creating any profiles so a
+        # failed board/model setup can resume with the same team and tokens.
+        $plannedProfiles = @(foreach ($agent in @($summary.Agents)) {
+            $identity = @($identities | Where-Object { $_.ProfileName -ceq $agent.ProfileName })[0]
+            [pscustomobject]@{ ProfileName=$agent.ProfileName; DisplayName=$agent.DisplayName; BotUserID=$identity.BotUserID; BotUsername=$identity.BotUsername; OwnsProfile=$true; Status='Pending' }
+        })
+        $state = [pscustomobject][ordered]@{
+            SchemaVersion = 2; Manager = $script:ResearchManager; OwnerSID = $owner; TeamID = $teamID; RuntimeKind = $(if ($UseExistingHermes) { 'Existing' } else { 'Pinned' })
+            InstallerVersion = [IO.File]::ReadAllText((Join-Path (Split-Path -Parent (Get-HermesResearchTeamSourceRoot)) 'VERSION')).Trim()
+            HermesHome = $paths.HermesHome; InstallDir = $paths.InstallDir; RuntimeRoot = $paths.RuntimeRoot
+            ServerURL = $summary.ServerURL; HomeChannelID = $summary.HomeChannelID; Model = $summary.Model; WizardOptions = $options
+            PayloadManifestSha256 = $payload.ManifestSha256; MigrationBackupPath = $migrationBackup
+            SetupStatus = 'Installing'; Tasks = @($servicePlan.TaskName, $leadPlan.TaskName); Profiles = $plannedProfiles; UpdatedAt = (Get-Date).ToUniversalTime().ToString('o')
+        }
+        Write-HermesResearchAtomicText -LiteralPath $statePath -Text (($state | ConvertTo-Json -Depth 8) + "`n")
         $private = Join-Path $root 'private'
         Protect-HermesResearchPrivateDirectory -LiteralPath $private -OwnerSID $owner
+        $bots = [ordered]@{}
+        foreach ($agent in @($summary.Agents)) { $bots[$agent.ProfileName] = $tokens[$agent.ProfileName] }
+        Write-HermesResearchAtomicText -LiteralPath (Join-Path $private 'bots.json') -Text (($bots | ConvertTo-Json) + "`n")
+
+        Publish-HermesResearchStage $ProgressCallback 'research-files' '검증된 연구팀 구성 파일을 설치합니다.' 18
+        $teamRoot = Install-HermesResearchTeamFiles -Payload $payload -ResearchRoot $root
         $gateway = $null
         $overlays = @()
         if ($summary.Model.Mode -ceq 'Gateway') {
@@ -432,9 +501,6 @@ function Invoke-HermesResearchTeamSetup {
         if ($gateway) { $secrets['RESEARCH_GATEWAY_SECRET'] = $gateway.Secret; $secrets['RESEARCH_GATEWAY_URL'] = $gateway.Url }
         $secretsPath = Join-Path $private 'service.env'
         Write-HermesResearchEnvValues -LiteralPath $secretsPath -Values $secrets -Header 'Research team service — bot tokens per runner. Managed by Hermes Easy Setup.'
-        $bots = [ordered]@{}
-        foreach ($agent in @($summary.Agents)) { $bots[$agent.ProfileName] = $tokens[$agent.ProfileName] }
-        Write-HermesResearchAtomicText -LiteralPath (Join-Path $private 'bots.json') -Text (($bots | ConvertTo-Json) + "`n")
         $runners = New-Object System.Collections.Generic.List[object]
         foreach ($role in @('research-librarian', 'research-experimenter', 'research-writer')) { $runners.Add([ordered]@{ role = $role; slot = 1; task_timeout = 60 * [int]$options.TaskTimeoutMinutes; heartbeat = 1800 }) }
         for ($slot = 1; $slot -le [int]$options.ReviewerSlots; $slot++) { $runners.Add([ordered]@{ role = 'research-reviewer'; slot = $slot; task_timeout = 60 * [int]$options.TaskTimeoutMinutes; heartbeat = 1800 }) }
@@ -447,14 +513,7 @@ function Invoke-HermesResearchTeamSetup {
         }
         Write-HermesResearchAtomicText -LiteralPath $serviceConfig -Text (($service | ConvertTo-Json -Depth 6) + "`n")
 
-        $state = [pscustomobject][ordered]@{
-            SchemaVersion = 2; Manager = $script:ResearchManager; OwnerSID = $owner; TeamID = $teamID; RuntimeKind = $(if ($UseExistingHermes) { 'Existing' } else { 'Pinned' })
-            InstallerVersion = [IO.File]::ReadAllText((Join-Path (Split-Path -Parent (Get-HermesResearchTeamSourceRoot)) 'VERSION')).Trim()
-            HermesHome = $paths.HermesHome; InstallDir = $paths.InstallDir; RuntimeRoot = $paths.RuntimeRoot
-            ServerURL = $summary.ServerURL; HomeChannelID = $summary.HomeChannelID; Model = $summary.Model; WizardOptions = $options
-            PayloadManifestSha256 = $payload.ManifestSha256; MigrationBackupPath = $migrationBackup
-            Tasks = @($servicePlan.TaskName, $leadPlan.TaskName); Profiles = $records.ToArray(); UpdatedAt = (Get-Date).ToUniversalTime().ToString('o')
-        }
+        $state.Profiles = $records.ToArray(); $state.SetupStatus = 'Configured'
         Write-HermesResearchAtomicText -LiteralPath $statePath -Text (($state | ConvertTo-Json -Depth 8) + "`n")
         $locationsPath = Join-Path $options.WorkspacePath 'RESEARCH_PATHS.md'
         $locations = Invoke-HermesProcess -FilePath $python -ArgumentList @('-B', (Join-Path $teamRoot 'shared\research_board.py'), 'locations', '--workspace', $options.WorkspacePath, '--write') -WorkingDirectory $options.WorkspacePath -Environment $boardEnv -TimeoutSeconds 120
