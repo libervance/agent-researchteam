@@ -280,6 +280,14 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
         $beforeBackup = @($script:migrationCalls | Where-Object { $_ -ceq 'backup' }).Count
         $fiveResult = Invoke-Setup $paths $fiveInput
         Assert ($fiveResult.Succeeded -and $fiveResult.MigrationBackupPath -like '*migrations*' -and @($script:migrationCalls | Where-Object { $_ -ceq 'backup' }).Count -eq ($beforeBackup + 1)) 'Beta replacement of an obsolete five-role team backs up settings before updating'
+        $fiveState = [IO.File]::ReadAllText($fiveStatePath) | ConvertFrom-Json
+        $fiveState.PayloadManifestSha256 = '0' * 64
+        [IO.File]::WriteAllText($fiveStatePath, ($fiveState | ConvertTo-Json -Depth 8))
+        $normalUpdateInput = New-Input $paths
+        $beforeBackup = @($script:migrationCalls | Where-Object { $_ -ceq 'backup' }).Count
+        $updated = Invoke-Setup $paths $normalUpdateInput -Resume
+        Assert ($updated.Succeeded -and $updated.MigrationBackupPath -like '*migrations*' -and @($script:migrationCalls | Where-Object { $_ -ceq 'backup' }).Count -eq ($beforeBackup + 1)) 'Normal five-role update backs up obsolete configuration without beta consent'
+        Assert (([IO.File]::ReadAllText($fiveStatePath) | ConvertFrom-Json).InstallerVersion -ceq [IO.File]::ReadAllText((Join-Path $projectRoot 'VERSION')).Trim()) 'Updated team records the installer version'
     } finally {
         if (Test-Path -LiteralPath $script:fixtureRoot) { Remove-Item -LiteralPath $script:fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue }
     }

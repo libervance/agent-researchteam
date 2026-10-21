@@ -20,13 +20,16 @@ foreach ($name in @(
     'TeamServerURL','HomeChannelID','TeamAdminPassword','AgentRows','IssueAllBotsButton',
     'ModelModeGateway','ModelModeCodex','GatewayPanel','AnthropicKey','OpenAIKey','LocalBaseURL','LocalModel','GatewayPort',
     'WorkspacePath','WorkspaceBrowseButton','HumanUsername','TaskTimeoutMinutes','ReviewerSlots','SelectedModelSummary','ModelEgressConsent','PublicWebConsent','MigrationConsent',
-    'TeamResumeCheck','TeamConsent','AllTeamConsents','TeamApplyButton','TeamOpenButton','TeamResult','Progress','Log','CloseButton'
+    'TeamResumeCheck','TeamUpdateStatus','TeamConsent','AllTeamConsents','TeamApplyButton','TeamOpenButton','TeamResult','Progress','Log','CloseButton'
 )) {
     $ui[$name] = $window.FindName($name)
     if ($null -eq $ui[$name]) { throw "필수 연구실 컨트롤이 없습니다: $name" }
 }
 $script:paths = Get-HermesDefaultPaths
 $script:defaultPaths = $script:paths
+$script:installerVersion = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'VERSION')).Trim()
+if ($script:installerVersion -cnotmatch '^\d+\.\d+\.\d+$') { throw '설치기 버전을 확인하지 못했습니다.' }
+$window.Title = $window.Title + ' — 설치기 ' + $script:installerVersion
 $script:useExistingHermes = $false
 $ui.ExistingHermesHome.Text = $script:paths.HermesHome
 $ui.ExistingHermesInstallDir.Text = $script:paths.InstallDir
@@ -239,9 +242,14 @@ function Read-ResearchSavedTeam {
     $savedState = [IO.File]::ReadAllText($path,[Text.Encoding]::UTF8) | ConvertFrom-Json
     if ($savedState.Manager -ceq 'HermesEasySetup.Research.v1') {
         Add-ResearchLog '이전 4역할 연구팀(분배 서비스)이 설치되어 있습니다. 베타 실험에서 교체하려면 아래 「베타 실험 전용」 항목을 선택하세요. 기록은 보존됩니다.'
+        $ui.TeamUpdateStatus.Text = "현재 설치: 이전 4역할 팀 / 이 설치기: $($script:installerVersion). 베타 실험용 교체를 선택해야 합니다. 이 창을 여는 것만으로 기존 팀은 변경되지 않습니다."
         return
     }
     $saved = Get-ResearchSavedTeam $savedState
+    $sourceHash = [string](Get-HermesResearchTeamPayload).ManifestSha256
+    $installedHash = $(if ($savedState.PSObject.Properties['PayloadManifestSha256']) { [string]$savedState.PayloadManifestSha256 } else { '' })
+    $installedVersion = $(if ($savedState.PSObject.Properties['InstallerVersion'] -and $savedState.InstallerVersion) { [string]$savedState.InstallerVersion } else { '버전 기록 없음' })
+    $needsUpdate = $installedHash -cne $sourceHash
     $key = $path + '|' + $script:paths.HermesHome + '|' + $script:paths.InstallDir + '|' + $savedState.TeamID
     if ($OnlyIfUnedited -and $script:lastLoadedTeamKey -ceq $key) { return }
     $tokens = @{}
@@ -277,6 +285,12 @@ function Read-ResearchSavedTeam {
         }
         $ui.TeamResumeCheck.IsChecked = $true; $script:lastLoadedTeamKey = $key
     } finally { $tokens.Clear(); $script:restoringTeam = $false }
+    $ui.TeamUpdateStatus.Text = $(if ($needsUpdate) {
+        "현재 설치: $installedVersion (이전 연구팀 구성). 이 설치기: $($script:installerVersion) — 새 구성 적용 대기. 아래 갱신·재설정이 선택되어 있습니다. 필수 동의 후 업데이트 버튼을 누르면 이전 설정을 백업하고 팀 서비스를 재시작한 뒤 실제 작업 테스트를 진행합니다."
+    } else {
+        "현재 설치: $installedVersion / 이 설치기: $($script:installerVersion). 연구팀 구성 파일이 같습니다. 화면 변경 확인만 할 때는 재설정할 필요가 없습니다."
+    })
+    $ui.TeamApplyButton.Content = $(if ($needsUpdate) { '연구팀 업데이트·실제 작업 테스트' } else { '연구팀 재설정·실제 작업 테스트' })
     Add-ResearchLog '저장된 다섯 봇 연결·이름·모델·작업 설정을 불러왔습니다. 토큰과 키는 가려진 입력란에만 넣었으며 설치 시 다시 검증합니다.'
 }
 
@@ -487,6 +501,9 @@ function Complete-ResearchWorker {
                 if ($result.PSObject.Properties['Notes']) { foreach ($note in @($result.Notes)) { if ($note) { Add-ResearchLog ([string]$note) } } }
                 $ui.TeamResult.Text = $lines -join [Environment]::NewLine
                 $ui.TeamResumeCheck.IsChecked = $true
+                $ui.TeamUpdateStatus.Text = "이 설치기 $($script:installerVersion)의 연구팀 구성이 적용되었습니다. 실제 작업 테스트 결과는 아래에서 확인하세요."
+                if ($result.PSObject.Properties['MigrationBackupPath'] -and $result.MigrationBackupPath) { $ui.TeamUpdateStatus.Text += "`n이전 구성 백업: $($result.MigrationBackupPath)" }
+                $ui.TeamApplyButton.Content = '연구팀 재설정·실제 작업 테스트'
             }
             if ($success -and [bool]$result.Succeeded) {
                 if (Test-ResearchWorkflowEvidence $result) {
@@ -859,6 +876,7 @@ if ($SmokeTest) {
         [IO.File]::WriteAllText((Join-Path $researchRoot 'gateway\env'),("ANTHROPIC_API_KEY=sk-ant-fixture-key-0123456789`n"),(New-Object Text.UTF8Encoding($false)))
         $script:teamInputsEdited = $false; $script:lastLoadedTeamKey = $null
         Read-ResearchSavedTeam -OnlyIfUnedited
+        if (-not $ui.TeamUpdateStatus.Text.Contains('새 구성 적용 대기') -or [string]$ui.TeamApplyButton.Content -cne '연구팀 업데이트·실제 작업 테스트') { throw '이전 구성과 새 설치기 구성의 차이가 화면에 표시되지 않았습니다.' }
         if (@($script:agents | Where-Object { $_.Token.Password.Length -ne 26 }).Count -ne 0 -or $ui.Log.Text.Contains('a' * 26) -or $ui.Log.Text.Contains('sk-ant-fixture')) { throw '복원된 비공개 토큰·키가 비어 있거나 안내에 노출됐습니다.' }
         if ($script:agents[0].Name.Text -cne '저장된 총괄' -or [string]$ui.ReviewerSlots.SelectedItem -cne '2' -or $ui.TaskTimeoutMinutes.Text -cne '240' -or
             $ui.AnthropicKey.Password -cne 'sk-ant-fixture-key-0123456789' -or $ui.LocalModel.Text -cne 'fixture-local' -or $ui.ModelEgressConsent.IsChecked) { throw '저장된 다섯 역할 설정·모델이 복원되지 않았거나 동의가 미리 선택됐습니다.' }

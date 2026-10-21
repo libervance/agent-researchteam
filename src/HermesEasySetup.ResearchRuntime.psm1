@@ -351,8 +351,8 @@ function Invoke-HermesResearchTeamSetup {
         $serviceConfig = Join-Path $root 'service.json'
         $serviceScript = Join-Path $root 'team\shared\team_service.py'
         if ($null -ne $prior -and $prior.Kind -ceq 'Team') {
-            if ($obsoleteTeam -and $options.MigrationConsent) {
-                Publish-HermesResearchStage $ProgressCallback 'research-migration' '오래된 5역할 팀의 설정과 실행 작업을 백업합니다.' 11
+            if ($obsoleteTeam) {
+                Publish-HermesResearchStage $ProgressCallback 'research-migration' '이전 5역할 팀의 설정과 실행 작업을 백업합니다.' 11
                 $migrationTasks = @()
                 foreach ($plan in @($servicePlan,$leadPlan)) {
                     if (@(Get-HermesResearchGatewayTask -TaskName $plan.TaskName).Count -eq 1) { $migrationTasks += [pscustomobject]@{ Plan = $plan } }
@@ -449,6 +449,7 @@ function Invoke-HermesResearchTeamSetup {
 
         $state = [pscustomobject][ordered]@{
             SchemaVersion = 2; Manager = $script:ResearchManager; OwnerSID = $owner; TeamID = $teamID; RuntimeKind = $(if ($UseExistingHermes) { 'Existing' } else { 'Pinned' })
+            InstallerVersion = [IO.File]::ReadAllText((Join-Path (Split-Path -Parent (Get-HermesResearchTeamSourceRoot)) 'VERSION')).Trim()
             HermesHome = $paths.HermesHome; InstallDir = $paths.InstallDir; RuntimeRoot = $paths.RuntimeRoot
             ServerURL = $summary.ServerURL; HomeChannelID = $summary.HomeChannelID; Model = $summary.Model; WizardOptions = $options
             PayloadManifestSha256 = $payload.ManifestSha256; MigrationBackupPath = $migrationBackup
