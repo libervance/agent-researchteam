@@ -1,6 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-    [ValidateSet('Diagnose', 'Plan', 'Install', 'Verify', 'Setup', 'CodexStatus', 'CodexAuth', 'LabSetup', 'MattermostSetup', 'DockerStatus', 'DockerInstall', 'AdminPreflight', 'AdminSetup', 'AdminBotSetup', 'ResearchTeamSetup', 'ResearchPluginsSetup', 'Bundle')]
+    [ValidateSet('Diagnose', 'Plan', 'Install', 'Verify', 'Setup', 'CodexStatus', 'CodexAuth', 'DockerStatus', 'DockerInstall', 'AdminPreflight', 'AdminSetup', 'AdminBotSetup', 'ResearchTeamSetup', 'ResearchPluginsSetup', 'Bundle')]
     [string]$Action = 'Diagnose',
     [string]$HermesHome,
     [string]$InstallDir,
@@ -11,7 +11,6 @@ param(
     [switch]$Apply,
     [switch]$Resume,
     [switch]$UseExistingHermes,
-    [switch]$InstallBotControl,
     [switch]$ForceDownload,
     [switch]$LaunchSetup,
     [switch]$WaitForSetup,
@@ -20,12 +19,9 @@ param(
     [string]$ExpectedPlanFingerprint,
     [string]$DestinationPath,
     [string]$SourceConfigPath,
-    [string]$LabInputPath,
     [string]$AdminInputPath,
     [string]$ResearchInputPath,
-    [string]$AdminRoot,
-    [string]$MattermostServerURL,
-    [string]$MattermostServerName = '연구실'
+    [string]$AdminRoot
 )
 
 Set-StrictMode -Version 2.0
@@ -168,12 +164,6 @@ try {
             $result = Invoke-HermesCodexAuthentication @common -ProgressCallback $eventCallback
             if (-not $JsonEvents) { Write-ResultObject $result }
         }
-        'MattermostSetup' {
-            if (-not $Apply) { throw (New-Object System.InvalidOperationException 'Mattermost Desktop 설치·서버 등록은 -Apply 승인이 필요합니다.') }
-            $paths = Get-HermesDefaultPaths -RuntimeRoot $RuntimeRoot
-            $result = Invoke-HermesMattermostSetup -ServerURL $MattermostServerURL -ServerName $MattermostServerName -RuntimeRoot $paths.RuntimeRoot -ProgressCallback $eventCallback
-            if (-not $JsonEvents) { Write-ResultObject $result }
-        }
         'AdminPreflight' {
             Write-ResultObject (Get-HermesAdminPreflight)
         }
@@ -189,7 +179,7 @@ try {
                 $arguments = @{ InputData = $inputData; ProgressCallback = $eventCallback }
                 if ($AdminRoot) { $arguments.DeploymentRoot = $AdminRoot }
                 if ($Action -eq 'AdminBotSetup') { $result = Invoke-HermesAdminBotSetup @arguments }
-                else { $result = Invoke-HermesAdminSetup @arguments -Resume:$Resume -InstallBotControl:$InstallBotControl }
+                else { $result = Invoke-HermesAdminSetup @arguments -Resume:$Resume }
                 if (-not $JsonEvents) { Write-ResultObject $result }
             } finally {
                 $inputData = $null
@@ -225,59 +215,6 @@ try {
             } finally {
                 $researchInput = $null
                 if (Test-Path -LiteralPath $inputPath -PathType Leaf) { Remove-Item -LiteralPath $inputPath -Force -ErrorAction SilentlyContinue }
-            }
-        }
-        'LabSetup' {
-            if (-not $Apply) {
-                throw (New-Object System.InvalidOperationException '연구실 연결 변경을 승인하려면 -Apply를 함께 지정하세요.')
-            }
-            if ([string]::IsNullOrWhiteSpace($LabInputPath)) {
-                throw '암호화된 연구실 연결 입력 파일이 필요합니다.'
-            }
-            $paths = Get-HermesDefaultPaths -HermesHome $HermesHome -InstallDir $InstallDir -RuntimeRoot $RuntimeRoot
-            $inputPath = [System.IO.Path]::GetFullPath($LabInputPath)
-            $transportRoot = [System.IO.Path]::GetFullPath((Join-Path $paths.RuntimeRoot 'ui-transport'))
-            if (-not (Test-HermesPathContains -ParentPath $transportRoot -ChildPath $inputPath)) {
-                throw '연구실 연결 입력 파일은 마법사 런타임 transport 폴더 안에 있어야 합니다.'
-            }
-            try {
-                $input = Unprotect-HermesLabInput -LiteralPath $inputPath
-                $arguments = @{
-                    HermesHome = $paths.HermesHome
-                    InstallDir = $paths.InstallDir
-                    RuntimeRoot = $paths.RuntimeRoot
-                    ProfileName = [string]$input.ProfileName
-                    FullName = [string]$input.FullName
-                    Role = [string]$input.Role
-                    ModelName = [string]$input.ModelName
-                    MattermostURL = [string]$input.MattermostURL
-                    MattermostToken = [string]$input.MattermostToken
-                    HomeChannelID = [string]$input.HomeChannelID
-                    NetBirdIP = [string]$input.NetBirdIP
-                    DashboardPort = [int]$input.DashboardPort
-                    DashboardUsername = [string]$input.DashboardUsername
-                    DashboardPassword = [string]$input.DashboardPassword
-                    ReuseExistingProfile = [bool]$input.ReuseExistingProfile
-                    ProgressCallback = $eventCallback
-                }
-                $result = Invoke-HermesLabSetup @arguments
-                if ($JsonEvents) {
-                    & $eventCallback ([pscustomobject][ordered]@{
-                        type = 'complete'
-                        timestamp = (Get-Date).ToUniversalTime().ToString('o')
-                        stage = 'lab-setup'
-                        state = 'succeeded'
-                        percent = 100
-                        message = '연구실 Hermes 연결과 검증이 완료되었습니다.'
-                        data = $result
-                    })
-                } else {
-                    Write-ResultObject $result
-                }
-            } finally {
-                if (Test-Path -LiteralPath $inputPath -PathType Leaf) {
-                    Remove-Item -LiteralPath $inputPath -Force -ErrorAction SilentlyContinue
-                }
             }
         }
         'Bundle' {

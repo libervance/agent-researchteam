@@ -306,7 +306,7 @@ function Read-ResearchServerRecord {
     $state = [IO.File]::ReadAllText($path,[Text.Encoding]::UTF8) | ConvertFrom-Json
     if ([string]$state.Status -cne 'Ready' -or [string]$state.Identity.ServerId -cne $serverId -or
         [string]$state.ChannelId -cnotmatch '^[a-z0-9]{26}$' -or [string]$state.TeamId -cnotmatch '^[a-z0-9]{26}$') { throw '서버 완료 기록을 확인하지 못했습니다. 같은 서버를 이어서 설치하세요.' }
-    if ($state.PSObject.Properties['NetworkAddress'] -and -not [string]::IsNullOrWhiteSpace([string]$state.NetworkAddress)) { throw '이 초기 연구실 마법사는 로컬 전용 서버를 사용합니다. 공유된 서버는 관리자 마법사에서 먼저 확인하세요.' }
+    if ($state.PSObject.Properties['NetworkAddress'] -and -not [string]::IsNullOrWhiteSpace([string]$state.NetworkAddress)) { throw '이 초기 연구실 마법사는 로컬 전용 서버를 사용합니다. 공유된 서버의 공개 범위와 소유 기록을 먼저 확인하세요. 이 화면에서 임의로 전환하지 않습니다.' }
     $port = 0
     if (-not [int]::TryParse([string]$state.Identity.Port,[ref]$port) -or $port -lt 1024 -or $port -gt 65535) { throw '저장된 서버 포트가 올바르지 않습니다.' }
     foreach ($key in @('TeamName','ChannelName')) { if ([string]$state.Identity.$key -cnotmatch '^[a-z][a-z0-9-]{1,30}[a-z0-9]$') { throw '저장된 팀·채널 주소가 올바르지 않습니다.' } }

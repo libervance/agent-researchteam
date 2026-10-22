@@ -1251,42 +1251,20 @@ try {
     Assert-True ($entries -notcontains 'config.yaml') 'diagnostic bundle excludes config.yaml'
     Assert-True ($entries -contains 'preflight.json') 'diagnostic bundle includes preflight summary'
 
-    [xml]$xaml = Get-Content -Raw (Join-Path $projectRoot 'ui\MainWindow.xaml')
+    [xml]$xaml = Get-Content -Raw (Join-Path $projectRoot 'ui\ResearchWindow.xaml')
     Assert-True ($null -ne $xaml.DocumentElement) 'GUI XAML is well-formed XML'
-    $xamlText = Get-Content -Raw (Join-Path $projectRoot 'ui\MainWindow.xaml')
-    Assert-True ($xamlText -match 'x:Name="ApprovalCheck"') 'GUI has explicit approval control'
-    Assert-True ($xamlText -match 'x:Name="InstallButton"[^>]*IsEnabled="False"') 'GUI install starts disabled'
-    Assert-True ($xamlText -match 'x:Name="LabPanel"') 'GUI includes the fifth-step lab integration panel'
-    Assert-True ($xamlText -match 'x:Name="SetupModelCombo"') 'GUI includes an in-wizard Codex model selector'
-    Assert-True ($xamlText -match 'x:Name="SetupOAuthCode"' -and $xamlText -match 'x:Name="SetupOpenOAuthButton"') 'GUI displays the Codex device code and fixed browser action'
+    $xamlText = Get-Content -Raw (Join-Path $projectRoot 'ui\ResearchWindow.xaml')
+    Assert-True ($xamlText -match 'x:Name="HermesConsent"') 'GUI has explicit approval control'
+    Assert-True ($xamlText -match 'x:Name="HermesInstallButton"[^>]*IsEnabled="False"') 'GUI install starts disabled'
+    Assert-True ($xamlText -match 'x:Name="TeamTab"') 'GUI includes the 3+1 research team setup tab'
+    Assert-True ($xamlText -match 'x:Name="ModelCombo"') 'GUI includes an in-wizard Codex model selector'
+    Assert-True ($xamlText -match 'x:Name="AuthCode"' -and $xamlText -match 'x:Name="AuthOpenButton"') 'GUI displays the Codex device code and fixed browser action'
     Assert-True ($xamlText -notmatch 'Nous Portal|OpenRouter|Discord|Slack|Telegram|Spotify') 'GUI excludes unrelated provider and messaging setup choices'
     $codexModuleText = Get-Content -Raw (Join-Path $projectRoot 'src\HermesEasySetup.Codex.psm1')
     Assert-True ($codexModuleText -match "PYTHONUNBUFFERED.*=.*'1'" -and $codexModuleText -match "-Type 'oauth'") 'Codex OAuth streams its device code to a dedicated wizard event'
     Assert-True ($codexModuleText -match 'Test-HermesInstallation[^\r\n]+-StaticOnly' -and $codexModuleText -match '\$verification\.StaticProvenanceValid') 'Codex status refresh uses static provenance and never blocks on Hermes doctor'
-    $labModuleText = Get-Content -Raw (Join-Path $projectRoot 'src\HermesEasySetup.Lab.psm1')
-    Assert-True ($labModuleText -match "MATTERMOST_ALLOW_ALL_USERS = 'true'") 'lab setup fixes Mattermost authorization to open lab access'
-    Assert-True ($labModuleText -match "MATTERMOST_REQUIRE_MENTION = 'true'") 'lab setup requires mentions in channels'
-    Assert-True ($labModuleText -match "MATTERMOST_REPLY_MODE = 'off'") 'lab setup preserves flat channel replies and existing threads'
-    Assert-True ($labModuleText -match 'New-ScheduledTaskTrigger -AtStartup') 'lab setup registers gateway and dashboard at Windows boot'
-    Assert-True ($labModuleText -match 'New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At 4:00am') 'lab setup registers the fixed weekly update schedule'
-    Assert-True ($labModuleText -match '-LogonType S4U -RunLevel Limited') 'boot tasks run as the current non-elevated user without storing a password'
-    Assert-True ($labModuleText -match 'Wait-HermesScheduledTaskRunning') 'lab setup verifies the custom gateway task reaches running state'
-    Assert-True ($labModuleText -notmatch "-p \{1\} gateway restart") 'weekly updater restarts the registered gateway task instead of an unrelated Hermes service'
-    Assert-True ($labModuleText -match 'GIT_CONFIG_VALUE_0 = \{0\}.*\$installDir') 'scheduled runners trust only the exact Hermes checkout path'
-    Assert-True (Test-HermesLabProfileName -Name 'albus') 'lab profile validation accepts a separated named profile'
-    Assert-True (-not (Test-HermesLabProfileName -Name 'default')) 'lab profile validation rejects the shared default profile'
-    Assert-True (Test-HermesNetBirdIPv4 -Address '100.69.181.62') 'NetBird CGNAT IPv4 is accepted'
-    Assert-True (-not (Test-HermesNetBirdIPv4 -Address '192.168.0.19')) 'ordinary private IPv4 is not mistaken for NetBird'
-    Assert-True ($labModuleText -match "PSObject\.Properties\['InterfaceDescription'\]") 'NetBird discovery tolerates Get-NetIPAddress rows without InterfaceDescription'
-    $netBirdProbeThrew = $false
-    try { $null = Get-HermesNetBirdIPv4 } catch { $netBirdProbeThrew = $true }
-    Assert-True (-not $netBirdProbeThrew) 'NetBird discovery never throws on the current Windows network adapter schema'
-    $labModule = Get-Module HermesEasySetup.Lab
-    $labEnvFixture = Join-Path $testRootFull 'existing-profile.env'
-    [System.IO.File]::WriteAllText($labEnvFixture, ('TERMINAL_ENV=local' + [Environment]::NewLine), (New-Object System.Text.UTF8Encoding($false)))
-    & $labModule { param($LiteralPath) Set-HermesLabEnvFile -LiteralPath $LiteralPath -Values @{ MATTERMOST_URL = 'http://100.69.181.62:8065' } } $labEnvFixture
-    $labEnvFixtureLines = [System.IO.File]::ReadAllLines($labEnvFixture)
-    Assert-True ($labEnvFixtureLines -contains 'TERMINAL_ENV=local' -and $labEnvFixtureLines -contains 'MATTERMOST_URL=http://100.69.181.62:8065') 'Lab env writer atomically updates an existing profile env file without a backup path error'
+    $inputModuleText = Get-Content -Raw (Join-Path $projectRoot 'src\HermesEasySetup.Input.psm1')
+    Assert-True ($inputModuleText -match 'HermesEasySetup.LabInput.v1') 'NST input retains the original credential encryption contract'
     $labInputPath = Join-Path $testRootFull 'lab-input.bin'
     $labInput = [pscustomobject]@{ ProfileName = 'albus'; MattermostToken = 'lab-secret-token'; DashboardPassword = 'lab-secret-password' }
     Protect-HermesLabInput -Value $labInput -LiteralPath $labInputPath | Out-Null

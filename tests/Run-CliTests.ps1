@@ -52,10 +52,6 @@ try {
     Assert-CliTrue ($LASTEXITCODE -eq 2 -and ($dockerGuard[-1] | ConvertFrom-Json).message -like '*-Apply*') 'Docker download and install require explicit Apply'
     Assert-CliTrue (-not (Test-Path -LiteralPath $runtimeRoot)) 'Docker consent guard creates no runtime or download cache'
 
-    $mattermostGuard = @(& $systemPowerShell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $cli -Action MattermostSetup -RuntimeRoot $runtimeRoot -MattermostServerURL 'https://example.invalid' -Json)
-    Assert-CliTrue ($LASTEXITCODE -eq 2 -and ($mattermostGuard[-1] | ConvertFrom-Json).message -like '*-Apply*') 'Mattermost setup without Apply is default-deny'
-    Assert-CliTrue (-not (Test-Path -LiteralPath $runtimeRoot)) 'Mattermost consent guard creates no runtime state'
-
     $adminGuard = @(& $systemPowerShell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $cli -Action AdminSetup -RuntimeRoot $runtimeRoot -Json)
     Assert-CliTrue ($LASTEXITCODE -eq 2 -and ($adminGuard[-1] | ConvertFrom-Json).message -like '*-Apply*') 'Admin setup without Apply is default-deny'
     Assert-CliTrue (-not (Test-Path -LiteralPath $runtimeRoot)) 'Admin consent guard creates no runtime state'

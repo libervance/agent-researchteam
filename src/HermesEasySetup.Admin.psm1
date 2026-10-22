@@ -178,15 +178,6 @@ function Get-HermesAdminPluginMode {
     return $mode
 }
 
-function Get-HermesAdminBotControlPackage {
-    $pin = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\config\bot-control.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($pin.schema -ne 1 -or $pin.id -cne 'com.infonet.bot-control' -or $pin.version -cne '0.6.2' -or $pin.sha256 -cnotmatch '^[a-f0-9]{64}$' -or $pin.file -cne "com.infonet.bot-control-$($pin.version).tar.gz") { throw 'Bot Control 패키지 pin이 올바르지 않습니다.' }
-    $path = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ('..\assets\bot-control\' + $pin.file)))
-    Assert-HermesAdminPath $path
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or (Get-Item -LiteralPath $path).Length -ne $pin.size -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $pin.sha256) { throw 'Bot Control 패키지가 없거나 검증값과 다릅니다. 배포 파일을 다시 받으세요.' }
-    return [pscustomobject]@{ Pin = $pin; Path = $path }
-}
-
 function New-HermesAdminState {
     param($InputData, [string]$DeploymentRoot, [switch]$Resume)
     Assert-HermesAdminInput $InputData
@@ -261,7 +252,7 @@ function Invoke-HermesAdminCompose {
 
 function Invoke-HermesAdminAPI {
     param([string]$BaseURL, [string]$Path, [string]$Method = 'GET', $Body = $null, [AllowNull()][string]$Token)
-    if ($BaseURL -cnotmatch '^http://127\.0\.0\.1:[0-9]{4,5}$' -or (-not $Path.StartsWith('/api/v4/') -and -not $Path.StartsWith('/plugins/com.infonet.bot-control/api/v1/'))) { throw '관리자 초기화 API는 이 PC의 테스트 서버에만 연결할 수 있습니다.' }
+    if ($BaseURL -cnotmatch '^http://127\.0\.0\.1:[0-9]{4,5}$' -or -not $Path.StartsWith('/api/v4/')) { throw '관리자 초기화 API는 이 PC의 테스트 서버에만 연결할 수 있습니다.' }
     $request = @{ Uri = $BaseURL + $Path; Method = $Method; UseBasicParsing = $true; TimeoutSec = 20; MaximumRedirection = 0; ErrorAction = 'Stop' }
     $request.Headers = @{ 'X-Requested-With' = 'XMLHttpRequest' }
     if ($Token) { $request.Headers.Authorization = "Bearer $Token" }
@@ -352,76 +343,6 @@ function Set-HermesAdminPluginMode {
     Set-HermesAdminComposeFiles $State
 }
 
-function Send-HermesAdminPlugin {
-    param([string]$BaseURL,[string]$Token,$Package)
-    if ($BaseURL -cnotmatch '^http://127\.0\.0\.1:[0-9]{4,5}$') { throw '로컬 서버만 업로드할 수 있습니다.' }
-    Add-Type -AssemblyName System.Net.Http
-    $handler = New-Object Net.Http.HttpClientHandler
-    $handler.AllowAutoRedirect = $false; $handler.UseProxy = $false
-    $client = New-Object Net.Http.HttpClient($handler)
-    $client.Timeout = [TimeSpan]::FromSeconds(120)
-    $client.DefaultRequestHeaders.Authorization = New-Object Net.Http.Headers.AuthenticationHeaderValue('Bearer',$Token)
-    $form = New-Object Net.Http.MultipartFormDataContent
-    $stream = [IO.File]::OpenRead($Package.Path)
-    $part = New-Object Net.Http.StreamContent($stream)
-    $form.Add($part,'plugin',$Package.Pin.file)
-    $response = $null
-    try {
-        $response = $client.PostAsync(($BaseURL + '/api/v4/plugins'),$form).GetAwaiter().GetResult()
-        if (-not $response.IsSuccessStatusCode) { throw ("플러그인 업로드 실패 (HTTP " + [int]$response.StatusCode + ').') }
-        $manifest = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult() | ConvertFrom-Json
-        if ($manifest.id -cne $Package.Pin.id -or $manifest.version -cne $Package.Pin.version) { throw '서버가 반환한 플러그인 ID·버전이 다릅니다.' }
-    } finally { if ($response) { $response.Dispose() }; $form.Dispose(); $stream.Dispose(); $client.Dispose(); $handler.Dispose() }
-}
-
-function Install-HermesAdminBotControl {
-    param($State,$InputData,[string]$BaseURL)
-    $package = Get-HermesAdminBotControlPackage
-    $token = $null
-    try {
-        $token = (Invoke-HermesAdminAPI $BaseURL '/api/v4/users/login' 'POST' @{ login_id = $InputData.AdminUsername; password = $InputData.AdminPassword }).Token
-        $identity = (Invoke-HermesAdminAPI -BaseURL $BaseURL -Path '/api/v4/users/me' -Token $token).Data
-        if ($identity.id -cne $State.AdminUserId -or @($identity.roles -split ' ') -notcontains 'system_admin') { throw '플러그인 설치에는 이 배포의 시스템 관리자 인증이 필요합니다.' }
-        if ((Get-HermesAdminPluginMode $State) -eq 'disabled') {
-            Set-HermesAdminPluginMode $State 'enabled'
-            $null = Invoke-HermesAdminCompose $State @('up','-d','mattermost')
-            Wait-HermesAdminServer $BaseURL
-        }
-        $plugins = (Invoke-HermesAdminAPI -BaseURL $BaseURL -Path '/api/v4/plugins' -Token $token).Data
-        $existing = @(@($plugins.active) + @($plugins.inactive) | Where-Object { $_ -and $_.id -ceq $package.Pin.id })
-        if ($existing.Count -gt 0) {
-            if ($existing.Count -ne 1 -or $existing[0].version -cne $package.Pin.version -or -not $State.PSObject.Properties['BotControlSHA256'] -or $State.BotControlSHA256 -cne $package.Pin.sha256) { throw '이 마법사의 동일 패키지로 확인되지 않는 Bot Control이 있습니다. 자동 교체하지 않습니다.' }
-        } else {
-            $State | Add-Member -NotePropertyName BotControlSHA256 -NotePropertyValue $package.Pin.sha256 -Force
-            Write-HermesAdminJSON (Join-Path $State.Directory 'deployment.json') $State
-            try {
-                Set-HermesAdminPluginMode $State 'upload'
-                $null = Invoke-HermesAdminCompose $State @('up','-d','mattermost')
-                Wait-HermesAdminServer $BaseURL
-                Send-HermesAdminPlugin $BaseURL $token $package
-            } finally {
-                # Close uploads even on upload failure. The plugin remains usable after this restart.
-                Set-HermesAdminPluginMode $State 'enabled'
-                $null = Invoke-HermesAdminCompose $State @('up','-d','mattermost')
-                Wait-HermesAdminServer $BaseURL
-            }
-        }
-        $null = Invoke-HermesAdminAPI -BaseURL $BaseURL -Path ('/api/v4/plugins/' + $package.Pin.id + '/enable') -Method POST -Token $token
-        $access = $null
-        for ($attempt = 0; $attempt -lt 20; $attempt++) {
-            try { $access = (Invoke-HermesAdminAPI -BaseURL $BaseURL -Path '/plugins/com.infonet.bot-control/api/v1/access' -Token $token).Data; break } catch { Start-Sleep -Seconds 2 }
-        }
-        if (-not $access -or -not $access.system_admin -or $access.plugin_version -cne $package.Pin.version) { throw 'Bot Control 실행·관리자 접근 확인을 완료하지 못했습니다.' }
-        $null = Invoke-HermesAdminAPI -BaseURL $BaseURL -Path '/plugins/com.infonet.bot-control/api/v1/agents' -Token $token
-        $config = (Invoke-HermesAdminAPI -BaseURL $BaseURL -Path '/api/v4/config' -Token $token).Data
-        if (-not $config.PluginSettings.Enable -or $config.PluginSettings.EnableUploads) { throw '설치 후 플러그인 업로드 잠금 확인에 실패했습니다.' }
-        $State | Add-Member -NotePropertyName BotControlVersion -NotePropertyValue $package.Pin.version -Force
-        Write-HermesAdminJSON (Join-Path $State.Directory 'deployment.json') $State
-    } finally {
-        if ($token) { try { $null = Invoke-HermesAdminAPI -BaseURL $BaseURL -Path '/api/v4/users/logout' -Method POST -Token $token } catch { } }
-    }
-}
-
 function Initialize-HermesAdminAccount {
     param($State,$InputData,[string]$BaseURL)
     $token = $null
@@ -477,10 +398,9 @@ function Initialize-HermesAdminAccount {
 
 function Invoke-HermesAdminSetup {
     [CmdletBinding()]
-    param($InputData,[string]$DeploymentRoot = (Get-HermesAdminRoot),[switch]$Resume,[switch]$InstallBotControl,[scriptblock]$ProgressCallback)
+    param($InputData,[string]$DeploymentRoot = (Get-HermesAdminRoot),[switch]$Resume,[scriptblock]$ProgressCallback)
     Assert-HermesAdminInput $InputData
     Assert-HermesAdminNetworkInput $InputData
-    if ($InstallBotControl) { $null = Get-HermesAdminBotControlPackage }
     $state = $null
     $owned = $false
     $mutex = New-Object Threading.Mutex($false,('Local\HermesAdminSetup-' + $InputData.ServerId))
@@ -517,18 +437,11 @@ function Invoke-HermesAdminSetup {
             $state.NetworkTransition = $null
             Write-HermesAdminJSON (Join-Path $state.Directory 'deployment.json') $state
         }
-        if ($InstallBotControl) {
-            $state.Stage = 'bot-control'
-            Report 'bot-control' 90 'Bot Control 패키지를 검증·설치하고 관리자 API 접근과 업로드 잠금을 확인합니다.'
-            Install-HermesAdminBotControl -State $state -InputData $InputData -BaseURL $baseURL
-        }
         Report 'network' 95 '선택한 서버 공개 범위와 NetBird 공유 주소를 확인합니다.'
         Set-HermesAdminNetwork $state $InputData $baseURL
         $state.Status = 'Ready'; $state.Stage = 'complete'
         Write-HermesAdminJSON (Join-Path $state.Directory 'deployment.json') $state
         $result = [pscustomobject]@{ Ready = $true; ServerURL = $baseURL; AdminURL = "$baseURL/admin_console"; ChannelURL = "$baseURL/$($state.Identity.TeamName)/channels/$($state.Identity.ChannelName)"; AdminUsername = $state.Identity.AdminUsername; AdminRoleVerified = $true; Directory = $state.Directory; Project = $state.Project; MattermostVersion = $state.Pin.mattermostVersion; Scope = 'localhost test only'; RestartPolicy = 'unless-stopped (Docker Desktop must be running)' }
-        $result | Add-Member -NotePropertyName BotControlReady -NotePropertyValue ([bool]$InstallBotControl)
-        $result | Add-Member -NotePropertyName BotControlURL -NotePropertyValue "$baseURL/admin_console/plugins/plugin_com.infonet.bot-control"
         $result.ServerURL = Get-HermesAdminServerURL $state
         $result.ChannelURL = "$($result.ServerURL)/$($state.Identity.TeamName)/channels/$($state.Identity.ChannelName)"
         $result.Scope = $(if (Get-HermesAdminNetworkAddress $state) { 'NetBird IP + localhost; peer access not yet verified' } else { 'localhost test only' })

@@ -1,4 +1,4 @@
-# 0.17.2 실행 구조
+# NST 0.20.0 실행 구조
 
 개인 Hermes의 공용 Gateway는 유지합니다. 지원되는 Hermes에서는 네 연구 프로필에만 `gateway.standalone: true`, `gateway.multiplex_profiles: false`를 적용해 공용 경로에서 제외합니다. 총괄만 전용 채팅 Gateway로 응답하며 조사·분석·감사는 작업 보드 실행기에서 일합니다. 개인 config.yaml·인증은 변경하지 않습니다. 구형 Hermes에서 이 격리를 지원하지 않는데 공용 multiplex가 켜져 있으면 중복 응답 위험을 우회하지 않고 구체적인 호환 오류를 표시합니다.
 

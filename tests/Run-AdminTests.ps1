@@ -125,10 +125,10 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.Loader.psm1') -Force
         Set-HermesAdminComposeFiles $state
         Set-HermesAdminPluginMode $state 'disabled'
         Assert ((New-HermesAdminCompose $state).services.mattermost.environment.MM_PLUGINSETTINGS_ENABLE -ceq 'false') 'Legacy stage-two mode remains supported'
-        $package = Get-HermesAdminBotControlPackage
-        Assert ($package.Pin.version -ceq '0.6.2' -and $package.Pin.size -gt 0) 'Bundled plugin SHA256 and size validated'
+        $package = Get-HermesResearchPluginPackages
+        Assert (@($package.packages).Count -eq 2) 'NST and research-board package SHA256 and size validated'
         function script:Get-FileHash { return [pscustomobject]@{ Hash = ('0' * 64) } }
-        Reject { Get-HermesAdminBotControlPackage } 'Tampered plugin hash rejected before deployment'
+        Reject { Get-HermesResearchPluginPackages } 'Tampered plugin hash rejected before deployment'
         Remove-Item Function:Get-FileHash
         $foreignDir = Join-Path $root 'foreign-test'; New-Item -ItemType Directory -Path $foreignDir | Out-Null
         [IO.File]::WriteAllText((Join-Path $foreignDir 'keep.txt'),'keep')

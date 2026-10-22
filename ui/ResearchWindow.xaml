@@ -1,6 +1,6 @@
 ﻿<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Hermes Research Setup — 1인 연구실" Width="1060" Height="850" MinWidth="960" MinHeight="740"
+        Title="NST Research Team Setup — 1인 연구실" Width="1060" Height="850" MinWidth="960" MinHeight="740"
         WindowStartupLocation="CenterScreen" FontFamily="Segoe UI, Malgun Gothic" FontSize="14" Background="#F5F7FB">
   <Window.Resources>
     <Style TargetType="Button"><Setter Property="Padding" Value="14,8"/><Setter Property="Margin" Value="0,0,8,0"/></Style>
@@ -10,7 +10,7 @@
   <Grid Margin="24">
     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
     <StackPanel Margin="0,0,0,16">
-      <TextBlock Text="내 PC에 만드는 1인 연구실" FontSize="28" FontWeight="SemiBold" Foreground="#172A4A"/>
+      <TextBlock Text="NST · 내 PC에 만드는 1인 연구실" FontSize="28" FontWeight="SemiBold" Foreground="#172A4A"/>
       <TextBlock Text="Mattermost 로컬 서버 + Hermes + 논문·보고서 연구팀 4개 역할" Margin="0,6,0,0" Foreground="#56657D"/>
     </StackPanel>
     <TabControl x:Name="WizardTabs" Grid.Row="1">

@@ -52,6 +52,19 @@ def audit_input_allowed(path):
         and output_allowed(str(p.parent) + '/marker'))
 
 
+def result_summary(report, fallback):
+    """A deterministic summary of saved results, never an extra model call."""
+    parts = re.split(r'(?m)^## Result[^\n]*\n', report)
+    text = parts[-1] if len(parts) > 1 else ''
+    text = re.sub(r'```.*?```', '', text, flags=re.S)
+    lines = []
+    for line in text.splitlines():
+        line = re.sub(r'^[\s#>*\-\d.)]+', '', line).strip()
+        if not line or line.startswith(('STATUS:', 'status:', '|', '---')): continue
+        lines.append(re.sub(r'[*`_]', '', line))
+    return activity.clean(' · '.join(lines[:2]) if lines else fallback, 220)
+
+
 class Board:
     def __init__(self, workspace, home):
         self.workspace, self.home = Path(workspace).resolve(), Path(home).resolve()
@@ -150,6 +163,11 @@ class Board:
             status = meta.get('status', 'unknown')
             approval = ('사용자 결정 필요' if status in ('done', 'blocked') and meta.get('gate') == 'human' else '')
             tasks.append({'id': tid, 'assignee': meta.get('assignee'), 'status': status,
+                          'kind': 'task', 'title': '최종 검토' if meta.get('assignee') == 'research-reviewer' and meta.get('audit_scope') == 'final' else
+                              '근거 검토' if meta.get('assignee') == 'research-reviewer' else
+                              '자료 조사' if meta.get('assignee') == 'research-scout' else
+                              '화면 제작' if any(n.endswith('.html') for n in names) else '분석·보고서',
+                          'summary': result_summary(match[2], '결과가 저장되면 요약을 표시합니다.' if status != 'done' else '작업을 마쳤습니다. 상세 결과를 확인하세요.'),
                           'after': rb.csv(meta.get('after')), 'updated': meta.get('updated'),
                           'attempt': meta.get('attempt', '0'), 'max_attempts': meta.get('max_attempts'),
                           'claimed_by': meta.get('claimed_by', ''), 'stop_reason': meta.get('stop_reason', ''),
@@ -162,7 +180,8 @@ class Board:
                           'outputs': [{'path': n, 'available': n in files} for n in names if output_allowed(n)]})
         result = {'id': key, 'name': project.name, 'path': str(project), 'commit': commit, 'source': source,
                 'test': any(p.startswith(('_validation-', '_selftest-')) for p in project.parts),
-                'tasks': tasks, 'audits': audits, 'ledger_intact': chain_ok, 'error': None}
+                'tasks': tasks, 'audits': audits, 'ledger_intact': chain_ok, 'error': None,
+                'documents': [{'path': name, 'available': True} for name in sorted(files) if output_allowed(name)]}
         self.project_cache[key] = (version, result)
         return result
 
@@ -171,7 +190,11 @@ class Board:
             if self.cached is not None and time.monotonic() - self.cached_at < 2: return self.cached
             projects = []
             for key, path in self.projects().items():
-                try: projects.append(self.project(key, path))
+                try:
+                    project = dict(self.project(key, path))
+                    # Management observations have no Git ledger/audit authority.
+                    project['tasks'] = project['tasks'] + activity.management_cards(self.home, path.name)
+                    projects.append(project)
                 except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
                     projects.append({'id': key, 'name': path.name, 'tasks': [], 'error': activity.clean(exc), 'test': False})
             service, validation = {}, {'passed': False, 'state': '미검증'}
@@ -241,7 +264,10 @@ def handler(board):
                 if url.path == '/api/projects':
                     data = board.snapshot()
                 elif url.path == '/api/activity':
-                    data = {'events': activity.read_events(board.home, q.get('project', [None])[0]), 'updated': rb.now()}
+                    data = activity.read_page(board.home, q.get('project', [None])[0],
+                        q.get('role', [None])[0] or None, q.get('task', [None])[0] or None,
+                        q.get('before', [None])[0], int(q.get('limit', ['100'])[0]))
+                    data['updated'] = rb.now()
                 elif url.path == '/api/output':
                     path = q['path'][0]
                     raw = board.output(q['project'][0], path, q['commit'][0])
@@ -251,7 +277,9 @@ def handler(board):
                         return self.reply(200, raw[:200000], 'text/plain; charset=utf-8')
                     return self.reply(200, raw, 'application/octet-stream', PurePosixPath(path).name)
                 elif url.path == '/api/log':
-                    rows = activity.read_events(board.home, q.get('project', [None])[0])
+                    rows = activity.read_page(board.home, q.get('project', [None])[0],
+                        q.get('role', [None])[0] or None, q.get('task', [None])[0] or None,
+                        q.get('before', [None])[0], int(q.get('limit', ['500'])[0]))['events']
                     text = '\n'.join(f"{r['time']} | {r['agent']} | {r['project']}/{r['task']} | {r['action']} | {r['detail']} | {r['result']}" for r in rows)
                     return self.reply(200, text.encode(), 'text/plain; charset=utf-8', 'research-activity.txt')
                 else: return self.reply(404, b'Not found', 'text/plain')

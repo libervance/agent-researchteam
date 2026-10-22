@@ -1,60 +1,40 @@
-# 아키텍처
+# NST 연구팀 구조 (0.20.0)
 
-Hermes Easy Setup은 Hermes 설치 로직을 다시 구현하지 않습니다. 한국어 WPF와 안전 경계를 제공하고, 고정·검증된 공식 `scripts/install.ps1`의 stage protocol v1을 단계별로 구동합니다.
+진입점은 Start-HermesResearchSetup.cmd 하나입니다. 별도 사용자·관리자 GUI는 없습니다.
 
-```text
-사용자
-  -> 6단계 WPF: PC 확인 -> 계획/승인 -> CLI 설치/검증 -> Mattermost Desktop -> Codex 인증/모델 -> 연구실 연결
-  -> 기본 거부 승인 + plan fingerprint
-  -> 별도 signed System32 PowerShell worker
-  -> tag object -> peeled commit -> installer blob 검증
-  -> protocol/manifest 정확 일치 검증
-  -> 첫 변경 직전 plan freshness
-  -> stage별 재해시 + 제한시간 + JSON frame 검증
-  -> 원자적 체크포인트
-  -> fresh-only launcher 정상화 + no-exec Git/index/launcher 정적 검증
-  -> 검증된 설치 상태 확정
-  -> 별도 승인된 MattermostSetup worker: 공식 MSI 검증 + 기존 config 보존 병합
-  -> Codex OAuth worker와 모델 선택 (일반 hermes setup 미실행)
-  -> DPAPI Lab worker로 새 프로필과 서비스 연결
-```
+1. 로컬 서버: 공식 Docker Desktop과 고정 Mattermost/PostgreSQL 이미지, 배포 소유권, 최초 관리자·팀·채널을 검사·구성합니다.
+2. Hermes·모델: 고정 공식 설치 또는 기존 신뢰 설치를 확인하고 Codex 인증/모델을 선택합니다.
+3. 연구팀: 한 버튼으로 네 봇·토큰, 전체 페르소나, 전용 프로필/실행기, 한국어 보드·NST를 구성하고 실제 S1/S2/S3을 검사합니다.
 
-## 단일 모듈 경로
+GUI는 명시적 동의를 받은 뒤 별도 PowerShell CLI worker를 실행합니다. 관리자 비밀번호·토큰·키는 DPAPI 입력 파일로 전달하며 로그에 넣지 않습니다.
+Admin.psm1/AdminBots.ps1은 별도 제품 화면이 아니라 이 연구 마법사의 서버·봇 공용 백엔드입니다.
+Input.psm1은 기존 DPAPI 계약만 유지하며, 제거된 개인 Lab 프로필·Dashboard·주간 업데이트를 실행하지 않습니다.
+
+## 연구 실행
+
+- 사용자의 멘션을 총괄이 받고 Git 작업 보드에 작업·요구·의존성을 기록합니다.
+- 조사·분석·감사 실행기가 역할 작업을 가져갑니다. 총괄은 결과 이벤트를 보고 후속 조사·수정·감사와 사용자 질문을 결정합니다.
+- 감사자는 Git 이력과 작성자 작업환경이 없는 별도 사본을 검수합니다. 현재 파일·요구·근거 버전의 통과만 후속 사용/최종 전달을 허용합니다.
+- 봇 간 Mattermost 대화로 작업을 넘기지 않습니다. 서비스가 역할 토큰을 보관하고 주요 보고만 같은 스레드에 게시합니다.
+- 보드는 실제 저장 문서와 행동 기록을 보여 주는 읽기 전용 화면입니다. 승인이나 감사 판정을 우회하지 않습니다.
+- Codex 직접 연결은 공개 자료용이며, LiteLLM은 설정된 공개 등급에 따라 클라우드/로컬을 분리합니다.
+
+소스 team/ 전체·해시·페르소나·실행 한도와 두 NST/보드 플러그인 패키지는 이번 코드 정리에서 바꾸지 않았습니다.
+소스 복사본을 검사하는 동안 현재 설치된 연구팀은 교체하거나 재시작하지 않습니다.
+
+## 모듈
 
 | 구성 | 책임 |
-|---|---|
-| `Start-HermesEasySetup.cmd` | System32 Windows PowerShell 5.1 STA 진입점 |
-| `HermesEasySetup.Gui.ps1` | 6단계 WPF, 계획 승인, Install/Mattermost/Codex/DPAPI Lab worker 추적 |
-| `src/HermesEasySetup.Mattermost.psm1` | Desktop 감지, 고정 공식 MSI 검증·설치, 버전별 서버 목록 병합·백업, 서버 ping |
-| `src/HermesEasySetup.Docker.psm1` | 전체/사용자별 Docker 설치 감지, PC 조건·엔진 상태, 승인된 고정 다운로드·서명 검증·설치 후 재확인 |
-| `HermesAdminSetup.Gui.ps1` | 별도 서버·관리자·Bot Control 설정, 봇 생성 동의·결과 복사 |
-| `HermesResearchSetup.Gui.ps1` | 로컬 서버 → Hermes·모델 → 다섯 에이전트 한 페이지(봇·모델 라우터/Codex·작업 설정), 저장된 팀 복원 |
-| `src/HermesEasySetup.Research.psm1` | 네 역할 정의, 팀·모델 입력 계약(비밀값 없는 요약), `team/` 구성 파일의 SHA-256 검증 |
-| `src/HermesEasySetup.ResearchRuntime.psm1` | 봇·채널·요청자 사전 검사, 소유 확인·이전 팀 전환, 설치 순서, 실제 네 역할 테스트 (Governance: 프로필·작업 폴더·서비스 Task, Gateway: 모델 라우터, Migration: 이전 분배 서비스 정지·백업) |
-| `team/` | 연구팀 자체: 역할별 `SOUL.md`·스킬·설정, 작업 보드 실행기(`shared/research_board.py`), 팀 서비스, 설치 테스트, 모델 라우터(`gateway/`), 논문·보고서 템플릿. 구조는 [research-team.md](research-team.md) |
-| `src/HermesEasySetup.Admin.psm1` | 고정 로컬 Docker, 배포 소유권·관리자 검증, Compose 전환 기록 |
-| `src/HermesEasySetup.AdminBots.ps1` | Admin 모듈 내부 봇 생성·멤버십·토큰 DPAPI 보관·재시도·생성 설정 복구 |
-| `src/HermesEasySetup.Lab.psm1` | 새 프로필 격리, Mattermost 설정, NetBird Dashboard Task, Gateway Task, Bot Control 자동 등록·검증 |
-| `HermesEasySetup.ps1` | 사용자 CLI 및 관리자·`ResearchTeamSetup` 숨김 작업, 종료 코드 |
-| `src/HermesEasySetup.Core.psm1` | 경로, pin 설정, 해시, 오류 코드, 로그 정제 |
-| `src/HermesEasySetup.Preflight.psm1` | target-bound command, preflight, 계획 지문 |
-| `src/HermesEasySetup.StateStore.psm1` | 설치 잠금, 원자적 checkpoint, fail-closed resume |
-| `src/HermesEasySetup.Execution.psm1` | signed PowerShell, argv, process-tree timeout, JSON/event |
-| `src/HermesEasySetup.Protocol.psm1` | installer와 protocol/manifest 검증 |
-| `src/HermesEasySetup.InstallEngine.psm1` | 공식 stage 조정과 provenance 최종 검증 |
-| `src/HermesEasySetup.Bundle.psm1` | 허용 목록 기반 로컬 진단 ZIP과 경로 정제 |
-
-`Loader.psm1`은 명시된 모듈 경로만 import합니다. compat/initial 구현이나 이름 충돌 override는 배포에 포함하지 않습니다.
-
-## 개인 연구실
-
-새 진입점은 기존 GUI를 교체하지 않고 관리자 서버·Hermes 설치·Codex 인증 모듈을 재사용합니다. 세 번째 화면에서 다섯 에이전트의 이름·봇 토큰, 모델 연결(라우터 API 키 또는 Codex), 작업 폴더·시간 한도·동시 심사자 수를 함께 설정합니다. 공개 팀 구성은 RuntimeRoot의 `research\team.json`, 봇 토큰은 `research\private`, 공급자 키는 `research\gateway\env`(현재 사용자·SYSTEM만 접근)에 저장하고 다음 실행 때 복원합니다.
-
-첫 화면은 읽기 전용 `DockerStatus`를 조회하고 미설치·미실행·조건 미충족을 구분합니다. 명시적 동의가 있어야 `DockerInstall -Apply` worker에서 고정 공식 설치기를 다운로드·해시·서명 검증 후 실행합니다. 설치 종료 및 재부팅 필요는 Linux 엔진 준비와 별도로 표시합니다. Docker 없는 경로는 안내만 제공하며 다른 환경을 자동 인수하지 않습니다.
-
-Research runtime은 loopback Mattermost의 서로 다른 일반 봇 5개와 채널 접근, 요청할 사람 계정을 검사하고, `team/manifest.json`과 대조한 구성 파일을 `research\team`에 설치합니다. 기본 프로필을 복제하지 않는 독립 프로필 5개를 만들고(같은 이름의 남의 프로필이 있으면 아무것도 바꾸지 않고 중단), 각 프로필에 SOUL·스킬(Git Bash용 절대 경로로 렌더링)·설정 overlay를 적용합니다. 총괄만 Mattermost 토큰을 `.env`에 갖고, 나머지 네 역할의 토큰과 라우터 비밀값은 팀 서비스만 가집니다.
-
-로그인 예약 작업은 두 개입니다. `team service`(Python 감독 프로세스)가 모델 라우터와 역할별 실행기를 실행·재시작하고 상태를 `service-status.json`에 남기며, `lead chat`이 총괄의 `hermes gateway run`을 실행합니다. 설치는 두 작업의 실행·라우터 응답·Gateway PID 긍정 상태를 확인한 뒤, 실제 모델·봇으로 네 역할이 각각 작은 작업을 하는 테스트(`team_selftest.py`)와 결과 전달·기록 검증을 통과해야 완료로 표시합니다.
+| --- | --- |
+| HermesResearchSetup.Gui.ps1 / ui/ResearchWindow.xaml | 단일 3단계 NST 마법사, 원클릭 기본 구성, 동의·상태·실제 검증 결과 |
+| HermesEasySetup.ps1 / Loader.psm1 | 명시된 연구·설치·진단 worker와 모듈 로딩 |
+| Admin.psm1 / AdminBots.ps1 / AdminNetwork.ps1 | 소유 서버·관리자·일반 봇/토큰, 안전한 Compose 및 기존 공개 범위 기록 검증 |
+| Input.psm1 | 기존 서버/봇/마법사 입력의 DPAPI CurrentUser 호환 |
+| Research*.psm1 / Research*.ps1 | 네 역할·모델 계약·프로필 격리·설치·마이그레이션·준비 판정·NST 플러그인 |
+| Core / Preflight / StateStore / Execution / Protocol / InstallEngine / Existing / Codex | 공식 설치 무결성·승인·기존 설치·인증·복구 안전 경계 |
+| Docker.psm1 / Bundle.psm1 | 검증된 Docker 준비·승인된 다운로드와 비밀값을 제외한 진단 ZIP |
+| team/ | Git 작업 보드·독립 실행기·총괄 후속 판단·강제 감사·근거·모델 라우터·실제 설치 테스트 |
+| plugins/ / assets/mattermost-plugins/ | 읽기 전용 Mattermost 한국어 작업보드·NST 브랜딩과 검증 패키지 |
 
 ## 승인과 freshness
 
@@ -85,18 +65,6 @@ fresh `repository`는 RuntimeRoot의 예측 불가능한 managed global 설정�
 v0.1.2는 core CLI stage만 실행하고 `-SkipComputerUse`를 강제합니다. 선택적 Browser/TUI npm 설치인 `node-deps`는 child process를 만들기 전에 정책상 `Skipped`로 기록하며, Computer Use 사전 설치와 Desktop stage는 후속 버전까지 설치 진입 전에 거부합니다. 실행되는 일반 stage 제한은 30분, dependencies/platform-sdks는 90분입니다. timeout이면 정확한 System32 `taskkill.exe /T /F`로 해당 프로세스 트리를 정리합니다. path snapshot 이후 caught failure는 PATH/HERMES_HOME, 이번 exclude write, exact launcher와 attestation을 독립적으로 compare/CAS 복구하지만 checkout·venv·dependencies·실패 state 전체를 원복하지는 않습니다.
 
 `-Resume`은 schema, Running/Failed 상태, 계획 지문, manifest와 launcher attestation v1의 전체 정적 provenance가 모두 같은 경우만 허용됩니다. 이전 success 기록은 재개하지 않습니다. fresh in-memory proof는 상태 파일에 저장하지 않고 정상 caught failure는 새 attestation도 제거하므로, attestation 발급 뒤 비정상 종료로 두 기록이 함께 남은 제한된 경우만 모든 자동 단계를 Pending으로 되돌려 공식 idempotent stage를 다시 적용합니다. `configure`와 `gateway`는 별도 대화형 설정으로 넘깁니다.
-
-## 설치와 공식 설정의 분리
-
-4단계 Mattermost 화면은 명시적 승인 뒤 숨김 CLI worker를 실행합니다. 새 Desktop 설치만 서명된 MSI를 UAC로 실행하며 GUI 자체는 승격하지 않습니다. 현재 사용자 AppData의 config v1~v4를 보존 병합하고, 앱 실행 중 변경·손상/미지원 형식·reparse point를 거부합니다. 5단계는 기존 Codex OAuth와 모델 선택을 사용하며 일반 Hermes setup 메뉴는 열지 않습니다.
-
-6단계 Lab worker는 provider setup과 분리됩니다. GUI는 Mattermost 봇 토큰과 Dashboard 비밀번호가 포함된 JSON을 Windows DPAPI CurrentUser로 암호화한 뒤 RuntimeRoot의 ui-transport 아래 임시 파일로 전달합니다. CLI 인수와 JSON 이벤트에는 비밀값을 넣지 않으며 worker는 파일을 복호화해 사용한 뒤 삭제합니다.
-
-Lab worker는 기본 프로필을 clone한 새 프로필에서 메시징 환경 변수만 정리하고 Mattermost 연결과 관리 정체성을 기록합니다. Dashboard는 NetBird IP에 바인딩된 사용자 Scheduled Task로, Gateway는 해당 프로필의 공식 Hermes gateway install 명령으로 자동 시작합니다. 마지막으로 봇 토큰으로 Bot Control 등록 API를 호출하며 Mattermost 플러그인이 호출자의 봇 계정 여부와 Dashboard 로그인·상태를 검증한 뒤 연결 정보를 저장합니다.
-
-기존 설치의 setup-only 진입은 진단 Ready, exact official origin, `InstallDir\bin\hermes.exe`, 현재 peeled pin, schema 2의 case-exact `Completed`, 성공 verification과 HermesHome/InstallDir/RuntimeRoot 일치를 모두 요구합니다. 이 조건은 버튼 표시 자격일 뿐 실행 신뢰의 대체물이 아닙니다. 사용자가 설정 시작을 누르면 `Start-HermesOfficialSetup`이 현재 launcher attestation·Git/index·managed launcher와 CLI 실행을 다시 전체 검증하고, 실패하면 공식 setup child를 시작하지 않습니다.
-
-마법사는 설치 상태와 setup 프로세스 상태를 별도로 유지합니다. setup 프로세스의 종료 코드 0 또는 사용자가 창을 닫은 사실은 프로세스 종료 신호일 뿐, 모든 공급자 설정이 저장·검증되었다는 증거가 아닙니다. 따라서 설치 성공을 setup 결과 때문에 실패로 바꾸지 않고, setup 종료도 자동으로 `구성 완료`라고 표시하지 않습니다.
 
 ## 최종 provenance 검증
 

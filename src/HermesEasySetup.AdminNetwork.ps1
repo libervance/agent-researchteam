@@ -1,5 +1,16 @@
 ﻿Set-StrictMode -Version 2.0
 
+# Retained for validating owned server states and safe scope rollback.
+function Test-HermesNetBirdIPv4 {
+    [CmdletBinding()]
+    param([AllowNull()][string]$Address)
+    if ([string]::IsNullOrWhiteSpace($Address)) { return $false }
+    $ip = $null
+    if (-not [System.Net.IPAddress]::TryParse($Address, [ref]$ip)) { return $false }
+    $bytes = $ip.GetAddressBytes()
+    return ($bytes.Count -eq 4 -and $bytes[0] -eq 100 -and $bytes[1] -ge 64 -and $bytes[1] -le 127)
+}
+
 function Assert-HermesAdminNetworkAddress {
     param([AllowEmptyString()][string]$Address)
     if ($Address -and (-not (Test-HermesNetBirdIPv4 $Address) -or ([Net.IPAddress]::Parse($Address)).ToString() -cne $Address)) { throw '공유 주소는 표준 형식의 NetBird IPv4(100.64.0.0/10)만 허용합니다.' }

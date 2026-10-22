@@ -1,5 +1,5 @@
 ﻿[CmdletBinding()]
-param([string]$DestinationRoot = (Join-Path (Split-Path -Parent $PSScriptRoot) 'hermes-easy-setup-dist'))
+param([string]$DestinationRoot = (Join-Path (Split-Path -Parent $PSScriptRoot) 'nst-research-team-dist'))
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'src\HermesEasySetup.Loader.psm1') -Force
@@ -12,23 +12,20 @@ $version = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'VERSION')).Trim()
 if ($version -cnotmatch '^\d+\.\d+\.\d+$') { throw 'Invalid distribution version' }
 # Explicit allowlist, never archive the worktree, runtime, .git, backups, or personal notes.
 $common = @('HermesEasySetup.ps1','VERSION','LICENSE','README.md','SECURITY.md',
-    'config/hermes-manifest.json','config/hermes-source.json','config/mattermost-desktop.json','config/mattermost-server.json','config/bot-control.json','config/docker-desktop.json',
+    'config/hermes-manifest.json','config/hermes-source.json','config/mattermost-server.json','config/docker-desktop.json',
     'src/HermesEasySetup.Loader.psm1','src/HermesEasySetup.Core.psm1','src/HermesEasySetup.Preflight.psm1','src/HermesEasySetup.StateStore.psm1',
     'src/HermesEasySetup.Execution.psm1','src/HermesEasySetup.Protocol.psm1','src/HermesEasySetup.InstallEngine.psm1','src/HermesEasySetup.Existing.psm1','src/HermesEasySetup.Codex.psm1',
-    'src/HermesEasySetup.Lab.psm1','src/HermesEasySetup.Mattermost.psm1','src/HermesEasySetup.Docker.psm1','src/HermesEasySetup.Admin.psm1','src/HermesEasySetup.AdminBots.ps1','src/HermesEasySetup.AdminNetwork.ps1','src/HermesEasySetup.Research.psm1','src/HermesEasySetup.ResearchRuntime.psm1','src/HermesEasySetup.ResearchGovernance.ps1','src/HermesEasySetup.Bundle.psm1',
+    'src/HermesEasySetup.Input.psm1','src/HermesEasySetup.Docker.psm1','src/HermesEasySetup.Admin.psm1','src/HermesEasySetup.AdminBots.ps1','src/HermesEasySetup.AdminNetwork.ps1','src/HermesEasySetup.Research.psm1','src/HermesEasySetup.ResearchRuntime.psm1','src/HermesEasySetup.ResearchGovernance.ps1','src/HermesEasySetup.Bundle.psm1',
     'src/HermesEasySetup.ResearchDefaults.ps1','src/HermesEasySetup.ResearchMigration.ps1','src/HermesEasySetup.ResearchGateway.ps1','src/HermesEasySetup.ResearchPlugins.ps1',
-    'docs/installation-guide.ko.md','docs/admin-guide.ko.md','docs/two-pc-checklist.ko.md','docs/recovery-guide.ko.md','docs/admin-step5-validation.ko.md')
-$package = & (Get-Module HermesEasySetup.Admin) { Get-HermesAdminBotControlPackage }
+    'docs/research-guide.ko.md','docs/research-team.md','docs/research-board.ko.md','docs/recovery-guide.ko.md','docs/verification-0.19.0.md','docs/verification-0.20.0.md')
+$null = Get-HermesResearchTeamPayload
 # The research team payload is exactly what team/manifest.json lists (the installer re-checks every hash).
 $teamManifest = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'team\manifest.json'), [Text.Encoding]::UTF8) | ConvertFrom-Json
 $teamFiles = @('team/manifest.json') + @($teamManifest.files.PSObject.Properties.Name | ForEach-Object { 'team/' + $_ })
-$researchPluginPin = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'config/mattermost-plugins.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$researchPluginPin = & (Get-Module HermesEasySetup.Admin) { Get-HermesResearchPluginPackages }
 $researchPluginFiles = @('config/mattermost-plugins.json','plugins/research-board/bridge.py','docs/mattermost-plugins.ko.md') + @($researchPluginPin.packages | ForEach-Object {'assets/mattermost-plugins/' + $_.file})
 $roles = @(
-    @{ Name = 'User'; Entry = 'Start-HermesEasySetup.cmd'; Files = @('Start-HermesEasySetup.cmd','HermesEasySetup.Gui.ps1','ui/MainWindow.xaml') },
-    @{ Name = 'Admin'; Entry = 'Start-HermesAdminSetup.cmd'; Files = @('Start-HermesAdminSetup.cmd','HermesAdminSetup.Gui.ps1','ui/AdminWindow.xaml',('assets/bot-control/' + $package.Pin.file)) + $researchPluginFiles },
-    @{ Name = 'Research'; Entry = 'Start-HermesResearchSetup.cmd'; Files = @('Start-HermesResearchSetup.cmd','HermesResearchSetup.Gui.ps1','ui/ResearchWindow.xaml','docs/research-guide.ko.md',
-        'docs/research-team.md','docs/research-board.ko.md','docs/0.17-local-candidate.ko.md','docs/verification-0.17.0.md','docs/verification-0.17.1.md','docs/verification-0.17.2.md','docs/verification-0.17.3.md','docs/verification-0.18.0.md','docs/verification-0.19.0.md') + $teamFiles + $researchPluginFiles }
+    @{ Name = 'Research'; Entry = 'Start-HermesResearchSetup.cmd'; Files = @('Start-HermesResearchSetup.cmd','HermesResearchSetup.Gui.ps1','ui/ResearchWindow.xaml') + $teamFiles + $researchPluginFiles }
 )
 $plans = @()
 foreach ($role in $roles) {
@@ -38,7 +35,7 @@ foreach ($role in $roles) {
         Assert-DistributionPath $path
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw ('배포 파일이 없습니다: ' + $file) }
     }
-    $name = 'Hermes-' + $role.Name + '-Setup-' + $version
+    $name = 'NST-Research-Team-Setup-' + $version
     $path = Join-Path $DestinationRoot ($name + '.zip')
     if (Test-Path -LiteralPath $path) { throw '같은 이름의 배포 ZIP이 있습니다. 다른 출력 폴더를 선택하세요. 덮어쓰지 않습니다.' }
     $plans += [pscustomobject]@{ Name = $name; Role = $role.Name; Entry = $role.Entry; Files = $files; Path = $path }
@@ -76,12 +73,8 @@ foreach ($plan in $plans) {
             } finally { $outputStream.Dispose(); $inputStream.Dispose() }
         }
         Add-ZipText $archive ($plan.Name + '/FILES.sha256') (($manifest -join "`n") + "`n")
-        $purpose = $(if ($plan.Role -ceq 'Research') {
-            "개인 연구실용입니다. 현재 Windows PC에 로컬 서버·Hermes·논문·보고서 연구팀 에이전트 4개를 구성합니다.`n안내: docs/research-guide.ko.md`n설치 중 S1·S2·S3의 실제 결과·독립 감사·첨부 검증이 확인되어야 사용 준비 완료로 표시합니다.`n"
-        } else {
-            "관리자용은 서버 PC, 사용자용은 각 연구원 PC에서 실행합니다.`n두 PC 실사용 점검: docs/two-pc-checklist.ko.md`n"
-        })
-        $note = "Hermes Easy Setup $version — $($plan.Role)`n`n압축을 모두 푼 뒤 $($plan.Entry)를 더블클릭하세요.`n" +
+        $purpose = "NST 연구팀용입니다. 현재 Windows PC에 로컬 서버·Hermes·3+1 연구팀을 구성합니다.`n안내: docs/research-guide.ko.md`n실제 S1·S2·S3 결과·독립 감사·첨부 검증 전에는 사용 준비 완료로 표시하지 않습니다.`n"
+        $note = "NST Research Team Setup $version`n`n압축을 모두 푼 뒤 $($plan.Entry)를 더블클릭하세요.`n" +
             "현재 패키지는 미서명 로컬 후보 빌드입니다. 실제 모델 S1·S2·S3 완주를 인증한 배포본이 아닙니다. Windows x64용입니다.`n" + $purpose +
             "실패 시: docs/recovery-guide.ko.md`n개인 인증값·설치 상태·기존 Hermes 프로필은 포함하지 않았습니다.`n" +
             "기존 프로그램·프로필을 제거하지 말고 먼저 안내를 읽으세요.`n"
