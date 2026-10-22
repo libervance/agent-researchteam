@@ -62,6 +62,12 @@ jobs:
         shell: powershell
         run: .\tests\Test-PowerShellSyntax.ps1
 
+      - name: Pinned research payload bytes after Git checkout
+        shell: powershell
+        run: |
+          python -B team/build_manifest.py --check
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
       - name: Mattermost board plugin webapp registration
         shell: powershell
         run: node tests/test_mattermost_plugin_webapp.cjs
