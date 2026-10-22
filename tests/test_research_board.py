@@ -361,7 +361,9 @@ class BoardTests(Base):
         self.assertIn(str(self.home / "service-status.json"), content)
         self.assertIn(str(self.hh / "profiles"), content)
         self.assertIn("not a GitHub repository", content)
-        self.assertIn(str(self.paper), self.board("locations").stdout)
+        # The guide canonicalizes project paths; Windows TEMP can use RUNNER~1
+        # while Path.resolve() returns the equivalent long directory name.
+        self.assertIn(str(self.paper.resolve()), self.board("locations").stdout)
         self.assertEqual("https://github.com/org/p2.git",
                          self._public_remote_for_test("https://secret@github.com/org/p2.git"))
 
