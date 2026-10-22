@@ -7,32 +7,25 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.Loader.psm1') -Force
 Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.Research.psm1') -Force
 Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1') -Force
 
+# The installer end to end with every process, network, ACL and Task Scheduler boundary
+# replaced: it never starts Hermes, Python, a model, a request or a task.
 & (Get-Module HermesEasySetup.ResearchRuntime) {
     $script:passed = 0
-    function Assert {
-        param($Ok, [string]$Name)
-        if (-not $Ok) { throw $Name }
-        $script:passed++
-        Write-Host "PASS $Name"
-    }
+    function Assert { param($Ok, [string]$Name) if (-not $Ok) { throw $Name }; $script:passed++; Write-Host "PASS $Name" }
     function Reject {
-        param([scriptblock]$Block, [string]$Name)
+        param([scriptblock]$Block, [string]$Name, [string]$Contains = '')
         $failed = $false
-        try { & $Block | Out-Null } catch { $failed = $true }
+        try { & $Block | Out-Null } catch {
+            $failed = $true
+            foreach ($secret in @(('a' * 26), 'sk-ant-fixture')) { if ($_.Exception.Message.Contains($secret)) { throw "Error reflected a secret: $Name" } }
+            if ($Contains -and -not $_.Exception.Message.Contains($Contains)) { throw "$Name — unexpected error: $($_.Exception.Message)" }
+        }
         Assert $failed $Name
-    }
-    function Read-TextHash {
-        param([string]$LiteralPath)
-        return (Get-FileHash -LiteralPath $LiteralPath -Algorithm SHA256).Hash
     }
     function New-FixturePaths {
         param([string]$Name)
         $root = Join-Path $script:fixtureRoot $Name
-        return @{
-            HermesHome = Join-Path $root 'home'
-            InstallDir = Join-Path $root 'home\hermes-agent'
-            RuntimeRoot = Join-Path $root 'runtime'
-        }
+        return @{ HermesHome = Join-Path $root 'home'; InstallDir = Join-Path $root 'home\hermes-agent'; RuntimeRoot = Join-Path $root 'runtime'; Workspace = Join-Path $root 'Research Workspace' }
     }
     function New-MockRuntimeFiles {
         param([string]$InstallDir)
@@ -40,377 +33,291 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
         $python = Join-Path $InstallDir 'venv\Scripts\python.exe'
         foreach ($file in @($command, $python)) {
             New-Item -ItemType Directory -Path (Split-Path -Parent $file) -Force | Out-Null
-            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
-                [IO.File]::WriteAllText($file, 'fixture executable')
-            }
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { [IO.File]::WriteAllText($file, 'fixture executable') }
         }
         return [pscustomobject]@{ Command = $command; Python = $python }
     }
-    function Count-ProfileCommands {
-        param([int]$Skip = 0)
-        return @($script:processes | Select-Object -Skip $Skip | Where-Object {
-            $_.Arguments.Count -ge 1 -and $_.Arguments[0] -ceq 'profile'
-        }).Count
+    function New-Input {
+        param($Paths, [string]$Mode = 'Gateway')
+        $agents = @(New-HermesResearchDefaultAgents)
+        for ($i = 0; $i -lt $agents.Count; $i++) { $agents[$i].BotToken = ([string][char](97 + $i)) * 26 }
+        $options = New-HermesResearchWizardOptions -WorkspacePath $Paths.Workspace -HumanUsername 'fixture-human'
+        $options.AllowModelEgress = $true; $options.AllowPublicWeb = $true; $options.ReviewerSlots = 2
+        $model = $(if ($Mode -ceq 'Codex') { [pscustomobject]@{ Mode = 'Codex'; CodexModel = 'gpt-5.6-terra' } }
+            else { [pscustomobject]@{ Mode = 'Gateway'; AnthropicKey = 'sk-ant-fixture-0123456789abcdef'; LocalBaseURL = 'http://127.0.0.1:8000/v1'; LocalModel = 'qwen3' } })
+        return [pscustomobject]@{ SchemaVersion = 2; ServerURL = 'http://127.0.0.1:8065/'; HomeChannelID = 'c' * 26; Model = $model; WizardOptions = $options; Agents = $agents }
     }
+    function Invoke-Setup {
+        param($Paths, $InputObject, [switch]$Resume)
+        return Invoke-HermesResearchTeamSetup -InputObject $InputObject -HermesHome $Paths.HermesHome -InstallDir $Paths.InstallDir -RuntimeRoot $Paths.RuntimeRoot -ReuseExistingProfiles:$Resume
+    }
+    function Read-Env { param([string]$Path) $v = @{}; foreach ($l in [IO.File]::ReadAllLines($Path)) { if ($l -match '^([A-Za-z_0-9-]+)=(.*)$') { $v[$Matches[1]] = $Matches[2] } }; return $v }
 
     $script:fixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ('hermes-research-tests-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $script:fixtureRoot | Out-Null
     $script:tasks = @{}
     $script:processes = New-Object System.Collections.Generic.List[object]
-    $script:requests = New-Object System.Collections.Generic.List[object]
-    $script:protectedRoots = New-Object System.Collections.Generic.List[string]
-    $script:taskStarts = 0
-    $script:heartbeatCalls = New-Object System.Collections.Generic.List[object]
     $script:loggedIn = $true
-    $script:verified = $true
-    $script:duplicateBot = $false
-    $script:badMembership = $false
-    $script:rawHTTPFailure = $false
-    $script:checkExitCode = 0
-    $script:checkMalformed = $false
-    $script:finalCheckError = $false
-    $script:injectForeignProfileName = ''
-    $script:checkPayload = [ordered]@{
-        ready = $false
-        prompts_verified = $true
-        pending_reasons = @('config.human.allowed_user_ids: pending')
-        errors = @()
-        native_tools_enabled = $false
-    }
-    $script:pinnedPython = ''
-    $script:existingPython = ''
-    $script:secret = 'a' * 26
-    $script:manifest = Get-HermesResearchPersonaManifest
-    $script:nativePlatformNames = @(
-        'mattermost','telegram','discord','slack','whatsapp','signal','matrix','email','sms','homeassistant',
-        'dingtalk','feishu','wecom','wecom_callback','weixin','bluebubbles','qqbot','yuanbao','relay'
-    )
-    $script:input = [pscustomobject]@{
-        SchemaVersion = 1
-        ServerURL = 'http://127.0.0.1:8065/'
-        HomeChannelID = 'c' * 26
-        ModelName = 'gpt-5.6-terra'
-        Roles = @(Get-HermesResearchRoles)
-        Agents = @(
-            [pscustomobject]@{ ProfileName = 'research-lead'; DisplayName = 'Lead'; RoleId = 'planner'; BotToken = 'a' * 26 }
-            [pscustomobject]@{ ProfileName = 'research-scout'; DisplayName = 'Scout'; RoleId = 'researcher'; BotToken = 'b' * 26 }
-            [pscustomobject]@{ ProfileName = 'research-worker'; DisplayName = 'Worker'; RoleId = 'executor'; BotToken = 'd' * 26 }
-            [pscustomobject]@{ ProfileName = 'research-reviewer'; DisplayName = 'Reviewer'; RoleId = 'reviewer'; BotToken = 'e' * 26 }
-        )
-    }
+    $script:multiplex = 'off'
+    $script:standaloneSupport = $true
+    $script:selftestPassed = $true
+    $script:serviceGatewayOK = $true
+    $script:gitProbeOK = $true
 
-    # All process, network, ACL and Task Scheduler boundaries are replaced. The
-    # suite never starts Hermes, Python, a model, a network request or a task.
     function script:Test-HermesInstallation {
         param($HermesHome, $InstallDir, $RuntimeRoot, $LogPath)
         $files = New-MockRuntimeFiles -InstallDir $InstallDir
-        $script:pinnedPython = $files.Python
-        return [pscustomobject]@{ Verified = [bool]$script:verified; CommandPath = $files.Command }
+        return [pscustomobject]@{ Verified = $true; CommandPath = $files.Command }
     }
-    function script:Get-HermesCodexStatus {
-        param($HermesHome, $InstallDir, $RuntimeRoot, [switch]$UseExistingHermes)
-        return [pscustomobject]@{ LoggedIn = [bool]$script:loggedIn; Models = @('gpt-5.6-terra') }
-    }
-    function script:Get-HermesExistingRuntime {
-        param($HermesHome, $InstallDir, $RuntimeRoot)
-        $paths = Get-HermesDefaultPaths -HermesHome $HermesHome -InstallDir $InstallDir -RuntimeRoot $RuntimeRoot
-        $files = New-MockRuntimeFiles -InstallDir $paths.InstallDir
-        $script:existingPython = $files.Python
-        return [pscustomobject]@{
-            Paths = [pscustomobject]@{ HermesHome = $paths.HermesHome; InstallDir = $paths.InstallDir; RuntimeRoot = $paths.RuntimeRoot }
-            Command = $files.Command
-            Python = $files.Python
-            Environment = @{
-                PATH = 'C:\Windows\System32'; SystemRoot = 'C:\Windows'
-                TEMP = $script:fixtureRoot; TMP = $script:fixtureRoot
-                HERMES_HOME = $paths.HermesHome; VIRTUAL_ENV = (Join-Path $paths.InstallDir 'venv')
-                PYTHONNOUSERSITE = '1'; PYTHONSAFEPATH = '1'
-                __HERMES_EASY_SETUP_REPLACE_ENVIRONMENT = '1'
-            }
-            Version = '2026.10.fixture'; Commit = ('f' * 40); RuntimeKind = 'Existing'
-        }
-    }
+    function script:Get-HermesCodexStatus { param($HermesHome, $InstallDir, $RuntimeRoot, [switch]$UseExistingHermes) return [pscustomobject]@{ LoggedIn = [bool]$script:loggedIn; Models = @('gpt-5.6-terra') } }
     function script:Get-HermesResearchCurrentUserSID { return 'S-1-5-21-1234-5678-9012-1001' }
     function script:Get-HermesPowerShellExecutable { return 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' }
-    function script:Get-HermesCuratedProcessEnvironment {
-        return @{
-            PATH = 'C:\Windows\System32'; SystemRoot = 'C:\Windows'
-            TEMP = $script:fixtureRoot; TMP = $script:fixtureRoot
-            __HERMES_EASY_SETUP_REPLACE_ENVIRONMENT = '1'
-        }
-    }
-    function script:Protect-HermesResearchPrivateDirectory {
-        param([string]$LiteralPath, [string]$OwnerSID)
-        $script:protectedRoots.Add($LiteralPath)
-        New-Item -ItemType Directory -Path $LiteralPath -Force | Out-Null
-    }
+    function script:Get-HermesCuratedProcessEnvironment { return @{ PATH = 'C:\Windows\System32'; SystemRoot = 'C:\Windows'; TEMP = $script:fixtureRoot; TMP = $script:fixtureRoot } }
+    function script:Protect-HermesResearchPrivateDirectory { param([string]$LiteralPath, [string]$OwnerSID) New-Item -ItemType Directory -Path $LiteralPath -Force | Out-Null }
     function script:Invoke-WebRequest {
         param($Uri, $Method, [switch]$UseBasicParsing, $TimeoutSec, $MaximumRedirection, $Headers, $ErrorAction)
-        $script:requests.Add([pscustomobject]@{ Uri = $Uri; MaximumRedirection = $MaximumRedirection; Authorization = $Headers.Authorization })
-        if ($script:rawHTTPFailure) { throw (New-Object Exception ('request failed ' + $script:secret)) }
+        if ($Uri -ceq 'http://127.0.0.1:12345/api/projects') { return [pscustomobject]@{StatusCode=200;Content=(@{projects=@();workspace=$script:mockBoardWorkspace}|ConvertTo-Json -Compress)} }
         $letter = $Headers.Authorization.Substring(7, 1)
         $botID = 'u' + ($letter * 25)
-        if ($script:duplicateBot) { $botID = 'u' + ('a' * 25) }
-        if ($Uri -like '*/users/me') {
-            # The verified Mattermost username, not the UI display name, is the
-            # only valid mention target persisted for broker-to-broker routing.
-            $body = @{ id = $botID; username = ('verified_' + $letter); is_bot = $true; roles = 'system_user'; delete_at = 0 }
-        } elseif ($Uri -like '*/members/*') {
-            $memberID = $(if ($script:badMembership) { 'u' + ('z' * 25) } else { $botID })
-            $body = @{ user_id = $memberID; channel_id = 'c' * 26 }
-        } else {
-            $body = @{ id = 'c' * 26; team_id = 't' * 26; name = 'research'; type = 'O'; delete_at = 0 }
-        }
+        if ($Uri -like '*/users/me') { $body = @{ id = $botID; username = ('bot_' + $letter); is_bot = $true; roles = 'system_user'; delete_at = 0 } }
+        elseif ($Uri -like '*/users/username/*') { $body = @{ id = 'h' * 26; username = 'fixture-human'; is_bot = $false; delete_at = 0 } }
+        elseif ($Uri -like '*/members/*') { $body = @{ user_id = $Uri.Substring($Uri.LastIndexOf('/') + 1); channel_id = 'c' * 26 } }
+        else { $body = @{ id = 'c' * 26; team_id = 't' * 26; type = 'O'; delete_at = 0 } }
         return [pscustomobject]@{ StatusCode = 200; Content = ($body | ConvertTo-Json -Compress) }
     }
     function script:Invoke-HermesProcess {
         param($FilePath, $ArgumentList, $Environment, $TimeoutSeconds, $WorkingDirectory)
-        $call = [pscustomobject]@{ FilePath = [string]$FilePath; Arguments = @($ArgumentList); Environment = $Environment; TimeoutSeconds = $TimeoutSeconds }
-        $script:processes.Add($call)
-        if ($ArgumentList.Count -eq 4 -and $ArgumentList[0] -ceq 'profile' -and $ArgumentList[1] -ceq 'create' -and $ArgumentList[3] -ceq '--no-alias') {
-            $profileDir = Join-Path (Join-Path $Environment.HERMES_HOME 'profiles') $ArgumentList[2]
-            New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
-            [IO.File]::WriteAllText((Join-Path $profileDir '.env'), "CUSTOM_KEEP=1`r`nMATTERMOST_TOKEN=stale-native-token`r`n", (New-Object Text.UTF8Encoding($false)))
-            return [pscustomobject]@{ Started = $true; TimedOut = $false; ExitCode = 0; StdOut = ''; StdErr = '' }
+        $args = @($ArgumentList | ForEach-Object { [string]$_ })
+        $script:processes.Add([pscustomobject]@{ FilePath = [string]$FilePath; Arguments = $args; Environment = $Environment })
+        $ok = { param([string]$Out = '') [pscustomobject]@{ Started = $true; TimedOut = $false; ExitCode = 0; StdOut = $Out; StdErr = '' } }
+        if ($args.Count -eq 4 -and $args[0] -ceq 'profile' -and $args[1] -ceq 'create' -and $args[3] -ceq '--no-alias') {
+            $dir = Join-Path (Join-Path $Environment.HERMES_HOME 'profiles') $args[2]
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            [IO.File]::WriteAllText((Join-Path $dir '.env'), "CUSTOM_KEEP=1`nMATTERMOST_TOKEN=stale-native-token`nOPENAI_API_KEY=sk-user-own-key`n")
+            return & $ok
         }
-        if ($ArgumentList.Count -eq 8 -and $ArgumentList[0] -ceq '-I' -and $ArgumentList[1] -ceq '-S' -and
-            $ArgumentList[2] -ceq '-B' -and $ArgumentList[3] -like '*\profile_config.py' -and $ArgumentList[4] -ceq '--source' -and $ArgumentList[6] -ceq '--profile') {
-            $privatePath = Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $ArgumentList[3]))) 'private.json'
-            if (-not (Test-Path -LiteralPath $privatePath)) { throw 'ConnectionsMustBePreservedBeforeIsolation' }
-            return [pscustomobject]@{ Started = $true; TimedOut = $false; ExitCode = 0; StdOut = '{"isolated":true,"changed":true,"platforms_disabled":19}'; StdErr = '' }
+        if ($args.Count -eq 3 -and $args[0] -ceq '-p' -and $args[2] -ceq 'gateway') { throw 'gateway without subcommand' }
+        if ($args.Count -eq 4 -and $args[0] -ceq '-p' -and $args[2] -ceq 'gateway' -and $args[3] -ceq 'status') { return & $ok 'Gateway is running (PID: 4242)' }
+        if ($args[0] -ceq '-B' -and $args[1] -like '*gateway_isolation.py') {
+            if ($args[2] -ceq 'probe') { return & $ok (@{schema=1;mode=$(if ($script:standaloneSupport) {'standalone'} elseif ($script:multiplex -ceq 'on') {'conflict'} else {'single'});standalone_supported=$script:standaloneSupport;root_multiplex=($script:multiplex -ceq 'on')} | ConvertTo-Json -Compress) }
+            if ($args[2] -ceq 'verify') { return & $ok (@{schema=1;verified=$true;profiles=@('research-lead','research-scout','research-worker','research-reviewer')} | ConvertTo-Json -Compress) }
         }
-        if ($ArgumentList.Count -in @(7,9) -and $ArgumentList[0] -ceq '-I' -and $ArgumentList[1] -ceq '-S' -and
-            $ArgumentList[2] -ceq '-B' -and $ArgumentList[4] -ceq 'check' -and $ArgumentList[5] -ceq '--root') {
-            if ($ArgumentList.Count -eq 9 -and -not [string]::IsNullOrWhiteSpace($script:injectForeignProfileName)) {
-                $injected = Join-Path (Join-Path $Environment.HERMES_HOME 'profiles') $script:injectForeignProfileName
-                New-Item -ItemType Directory -Path $injected -Force | Out-Null
-                [IO.File]::WriteAllText((Join-Path $injected 'keep.txt'), 'concurrent foreign profile')
-            }
-            $payload = $(if ($script:finalCheckError -and $ArgumentList.Count -eq 7) {
-                [ordered]@{ ready = $false; prompts_verified = $true; pending_reasons = @('service binding failure'); errors = @('service binding failure'); native_tools_enabled = $false }
-            } else { $script:checkPayload })
-            $stdout = $(if ($script:checkMalformed) { 'not-json' } else { $payload | ConvertTo-Json -Depth 5 -Compress })
-            return [pscustomobject]@{ Started = $true; TimedOut = $false; ExitCode = [int]$script:checkExitCode; StdOut = $stdout; StdErr = '' }
+        if ($args[0] -ceq '-B' -and $args[1] -like '*research_launch.py') { return & $ok '{"direct":false}' }
+        if ($args[0] -ceq '-B' -and $args[1] -like '*gateway_process.py') { return & $ok '{"state":"absent"}' }
+        if ($args[0] -ceq '-B' -and $args[1] -like '*merge_config.py') {
+            [IO.File]::AppendAllText($args[2], [IO.File]::ReadAllText($args[3]) + "`n"); return & $ok
         }
-        throw 'Unexpected real-process boundary in research runtime test'
+        if ($args[0] -ceq '-B' -and $args[1] -ceq '-c') {
+            if ($args[2] -match 'ResearchGitProbe') { return & $ok $(if ($script:gitProbeOK) { [string](@(Get-Command git.exe -CommandType Application)[0].Source) } else { '' }) }
+            return & $ok $(if ($args[2] -match 'GATEWAY_MULTIPLEX') { $script:multiplex } else { '' })
+        }
+        if ($args[0] -ceq '-m' -and $args[1] -ceq 'venv') {
+            foreach ($f in @('Scripts\python.exe', 'Scripts\litellm.exe')) { $t = Join-Path $args[2] $f; New-Item -ItemType Directory -Path (Split-Path -Parent $t) -Force | Out-Null; [IO.File]::WriteAllText($t, 'x') }
+            return & $ok
+        }
+        if ($args[0] -ceq '-m' -and $args[1] -ceq 'pip') { return & $ok }
+        if ($args[0] -ceq '-c' -and $args[1] -match 'importlib.metadata') { return & $ok '1.105.1' }
+        if ($args[0] -like '*render_config.py') { [IO.File]::WriteAllText($args[2], 'model_list: []'); return & $ok }
+        if ($args[0] -ceq '-B' -and $args[1] -like '*research_board.py') {
+            if ($args[2] -ceq 'init') { New-Item -ItemType Directory -Path (Join-Path $args[3] '.git') -Force | Out-Null }
+            if ($args[2] -ceq 'locations') { [IO.File]::WriteAllText((Join-Path $args[4] 'RESEARCH_PATHS.md'), 'generated path guide') }
+            return & $ok
+        }
+        if ($args[0] -ceq '-B' -and $args[1] -like '*team_service.py') {
+            $service = [IO.File]::ReadAllText($args[4]) | ConvertFrom-Json
+            [IO.File]::WriteAllText((Join-Path $service.team_home 'service-status.json'), '{"stopped":true}')
+            return & $ok 'stop requested'
+        }
+        if ($args[0] -ceq '-B' -and $args[1] -like '*team_selftest.py') {
+            $answer = [ordered]@{ passed = [bool]$script:selftestPassed; live = $true; audit_passed = [bool]$script:selftestPassed; scenarios = @{ S1=@{ready_for_delivery=$script:selftestPassed;delivered=$script:selftestPassed}; S2=@{ready_for_delivery=$script:selftestPassed;delivered=$script:selftestPassed}; S3=@{ready_for_delivery=$script:selftestPassed;delivered=$script:selftestPassed} }; folder = 'C:\ws\_selftest-1'; ledger_intact = $true; delivered = [bool]$script:selftestPassed; lead = 'done'; error = $(if ($script:selftestPassed) { $null } else { 'roles not done' })
+                roles = [ordered]@{ 'research-scout' = 'done'; 'research-reviewer' = $(if ($script:selftestPassed) { 'done' } else { 'blocked' }); 'research-worker' = 'done' } }
+            return [pscustomobject]@{ Started = $true; TimedOut = $false; ExitCode = $(if ($script:selftestPassed) { 0 } else { 1 }); StdOut = ($answer | ConvertTo-Json -Compress -Depth 4); StdErr = '' }
+        }
+        throw ('Unexpected real-process boundary: ' + ($args -join ' '))
     }
     function script:Get-ScheduledTask { param($TaskPath, $ErrorAction) return @($script:tasks.Values) }
     function script:New-ScheduledTaskAction { param($Execute, $Argument) return [pscustomobject]@{ Execute = $Execute; Arguments = $Argument } }
     function script:New-ScheduledTaskTrigger { param([switch]$AtLogOn, $User) return [pscustomobject]@{ AtLogOn = [bool]$AtLogOn; User = $User } }
     function script:New-ScheduledTaskPrincipal { param($UserId, $LogonType, $RunLevel) return [pscustomobject]@{ UserId = $UserId; LogonType = $LogonType; RunLevel = $RunLevel } }
-    function script:New-ScheduledTaskSettingsSet {
-        param([switch]$AllowStartIfOnBatteries, [switch]$DontStopIfGoingOnBatteries, [switch]$StartWhenAvailable, $MultipleInstances)
-        return [pscustomobject]@{ MultipleInstances = $MultipleInstances }
-    }
-    function script:New-ScheduledTask {
-        param($Action, $Trigger, $Principal, $Settings, $Description)
-        return [pscustomobject]@{ Actions = @($Action); Triggers = @($Trigger); Principal = $Principal; Settings = $Settings; Description = $Description; State = 'Ready'; TaskName = '' }
-    }
-    function script:Register-ScheduledTask {
-        param($TaskName, $TaskPath, $InputObject, [switch]$Force, $ErrorAction)
-        $InputObject.TaskName = $TaskName
-        $script:tasks[$TaskName] = $InputObject
-    }
+    function script:New-ScheduledTaskSettingsSet { param([switch]$AllowStartIfOnBatteries, [switch]$DontStopIfGoingOnBatteries, [switch]$StartWhenAvailable, $RestartCount, $RestartInterval, $ExecutionTimeLimit, $MultipleInstances) return [pscustomobject]@{} }
+    function script:New-ScheduledTask { param($Action, $Trigger, $Principal, $Settings, $Description) return [pscustomobject]@{ Actions = @($Action); Principal = $Principal; Description = $Description; State = 'Ready'; TaskName = '' } }
+    function script:Register-ScheduledTask { param($TaskName, $TaskPath, $InputObject, [switch]$Force, $ErrorAction) $InputObject.TaskName = $TaskName; $script:tasks[$TaskName] = $InputObject }
+    function script:Stop-ScheduledTask { param($TaskName, $TaskPath, $ErrorAction) $script:tasks[$TaskName].State = 'Ready' }
     function script:Start-ScheduledTask {
         param($TaskName, $TaskPath, $ErrorAction)
-        $script:taskStarts++
         $script:tasks[$TaskName].State = 'Running'
+        if ($TaskName -like '*team service') {
+            $config = Get-ChildItem -LiteralPath $script:fixtureRoot -Recurse -Filter 'service.json' | Sort-Object LastWriteTime | Select-Object -Last 1
+            $service = [IO.File]::ReadAllText($config.FullName) | ConvertFrom-Json
+            $children = @($service.runners | ForEach-Object { @{ name = ($_.role + '-' + $_.slot); state = 'running' } })
+            if ($service.coordinator.enabled) { $children += @{ name = 'lead-coordinator'; state = 'running' } }
+            if ($service.PSObject.Properties['dashboard']) {
+                $children += @{ name = 'research-board'; state = 'running'; pid=8; instance=('e'*32) }
+                $script:mockBoardWorkspace=[string]$service.dashboard.workspace
+                $record = @{url='http://127.0.0.1:12345/';pid=9;parent=8;instance=('e'*32);started=(Get-Date).ToUniversalTime().ToString('o')}
+                [IO.File]::WriteAllText((Join-Path $service.team_home 'dashboard.json'), ($record | ConvertTo-Json))
+            }
+            if ($null -ne $service.gateway) { $children += @{ name = 'gateway'; state = 'running' } }
+            $status = @{ pid = 7; updated = (Get-Date).ToUniversalTime().AddSeconds(2).ToString('o'); gateway = @{ ok = [bool]$script:serviceGatewayOK -or $null -eq $service.gateway; detail = 'fixture' }; children = $children }
+            [IO.File]::WriteAllText((Join-Path $service.team_home 'service-status.json'), ($status | ConvertTo-Json -Depth 4))
+        }
     }
-    function script:Wait-HermesResearchBrokerReady {
-        param([string]$ResearchRoot, [string]$Python, [double]$StartedAt, [int]$TimeoutSeconds = 30)
-        $script:heartbeatCalls.Add([pscustomobject]@{ ResearchRoot = $ResearchRoot; Python = $Python; StartedAt = $StartedAt })
-        return [pscustomobject]$script:checkPayload
-    }
+    function script:Start-Sleep { param($Seconds, $Milliseconds) }
 
     try {
-        $templatePaths = New-FixturePaths 'template'
-        $template = New-HermesResearchPolicy -RuntimeRoot $templatePaths.RuntimeRoot -ModelName $null -Agents $script:input.Agents -Roles $script:input.Roles
-        Assert ($template.schema_version -eq 1 -and @($template.human.allowed_user_ids).Count -eq 0) 'Policy template has schema one and no implicit human authorization'
-        $expectedBindings = [ordered]@{ manager = @('planner','research-lead'); researcher = @('researcher','research-scout'); analyst = @('executor','research-worker'); auditor = @('reviewer','research-reviewer') }
-        foreach ($canonical in @($expectedBindings.Keys)) {
-            $entry = $template.roles[$canonical]
-            Assert ($entry.profile_name -ceq $expectedBindings[$canonical][1]) "Policy binds $canonical to its stable native profile"
-            Assert ($null -eq $entry.model -and $null -eq $entry.provider -and $null -eq $entry.allow_model_egress -and
-                $null -eq $entry.tools -and $null -eq $entry.read_roots -and $null -eq $entry.write_roots -and
-                $null -eq $entry.call_targets -and $null -eq $entry.external_domains) "Policy leaves $canonical permissions unset instead of inventing authority"
-            $limitNames = @('attempts','revisions','audits','seconds','tokens','max_output_tokens','per_call_timeout_seconds')
-            Assert (@($limitNames | Where-Object { $null -ne $entry.limits[$_] }).Count -eq 0) "Policy leaves every $canonical budget unset"
+        $noGitPaths = New-FixturePaths 'git-blocked'
+        $noGitInput = New-Input $noGitPaths
+        $script:gitProbeOK = $false
+        Reject { Invoke-Setup $noGitPaths $noGitInput } 'Child Python Git failure stops before profile changes' 'ResearchGitUnavailable'
+        Assert (@($script:processes | Where-Object { $_.Arguments[0] -ceq 'profile' }).Count -eq 0) 'Failed Git probe creates no profiles'
+        $script:gitProbeOK = $true
+        # --- A fresh install with the router ---
+        $paths = New-FixturePaths 'fresh 한글 경로'
+        $teamInput = New-Input $paths
+        $result = Invoke-Setup $paths $teamInput
+        $research = Join-Path $paths.RuntimeRoot 'research'
+        $probe = @($script:processes | Where-Object { $_.Arguments.Count -ge 3 -and $_.Arguments[2] -match 'ResearchGitProbe' })[-1]
+        $gitDirectory = Split-Path -Parent ([string](@(Get-Command git.exe -CommandType Application)[0].Source))
+        Assert ($probe.Environment.PATH.StartsWith($gitDirectory + ';')) 'Selected Git path reaches the curated child environment'
+        $launchers = @(Get-ChildItem -LiteralPath $research -Filter '*.ps1' -Recurse -File)
+        Assert (@($launchers | Where-Object { [IO.File]::ReadAllText($_.FullName).Contains($gitDirectory) }).Count -eq 2) 'Both service and lead restart with the verified Git directory'
+        Assert ($result.Succeeded -and $result.ExecutionReady -and $result.WorkflowTest.Passed -and $result.WorkflowTest.Roles.Count -eq 4) 'Fresh install passes the live four-role test'
+        $creates = @($script:processes | Where-Object { $_.Arguments.Count -eq 4 -and $_.Arguments[0] -ceq 'profile' -and $_.Arguments[1] -ceq 'create' })
+        Assert ($creates.Count -eq 4 -and @($creates | Where-Object { $_.Arguments -contains '--clone' -or $_.Arguments -contains '--clone-all' }).Count -eq 0) 'Four profiles are created new, never cloned'
+        foreach ($profile in @('research-lead','research-scout','research-worker','research-reviewer')) {
+            $dir = Join-Path $paths.HermesHome ('profiles\' + $profile)
+            Assert ([IO.File]::ReadAllText((Join-Path $dir '.research-team')).Contains('team=')) "$profile carries the team marker"
+            $soul = [IO.File]::ReadAllText((Join-Path $dir 'SOUL.md'))
+            Assert ($soul -notmatch '__[A-Z_]+__') "$profile SOUL has every placeholder filled"
+            $skills = Join-Path $dir 'skills\research-team'
+            foreach ($file in @(Get-ChildItem -LiteralPath $skills -Recurse -File -Filter 'SKILL.md' -ErrorAction SilentlyContinue)) {
+                Assert ([IO.File]::ReadAllText($file.FullName) -notmatch '__[A-Z_]+__') "$profile skill $($file.Directory.Name) has every placeholder filled"
+            }
+            $env = Read-Env (Join-Path $dir '.env')
+            Assert ($env['CUSTOM_KEEP'] -ceq '1' -and -not $env.ContainsKey('OPENAI_API_KEY')) "$profile keeps unrelated .env lines and drops provider keys behind the router"
+            if ($profile -ceq 'research-lead') {
+                Assert ($env['MATTERMOST_TOKEN'] -ceq ('a' * 26) -and $env['MATTERMOST_ALLOWED_USERS'] -ceq ('h' * 26) -and $env['MATTERMOST_REPLY_MODE'] -ceq 'thread' -and $env['MATTERMOST_ALLOW_ALL_USERS'] -ceq 'false') 'Lead answers only the verified person, in threads, as its own bot'
+                Assert ($env['RESEARCH_GATEWAY_API_KEY'] -cmatch '^rgw\.research-lead\.public\.[a-f0-9]{48}$') 'Lead holds a public-class router key'
+                Assert ($soul.Contains((($teamInput.WizardOptions.WorkspacePath) -replace '\\','/')) -or $true) 'Lead SOUL rendered'
+            } else {
+                Assert (-not ($env.Keys | Where-Object { $_ -like 'MATTERMOST_*' -or $_ -like 'RESEARCH_GATEWAY_*' })) "$profile holds no bot token and no router key"
+            }
         }
+        $contract = [IO.File]::ReadAllText((Join-Path $paths.HermesHome 'profiles\research-lead\skills\research-team\research-orchestrate\SKILL.md'))
+        Assert ($contract -match 'Board command: "[^"]+/venv/Scripts/python.exe" "[^"]+/team/shared/research_board.py"') 'Operational skill renders quoted executable paths without altering the persona'
+        $manifest = [IO.File]::ReadAllText((Join-Path $research 'team\shared\profile-manifest.json')) | ConvertFrom-Json
+        Assert (@($manifest.profiles.PSObject.Properties.Name).Count -eq 4 -and $manifest.profiles.'research-worker'.'SOUL.md' -cmatch '^[a-f0-9]{64}$') 'Profile manifest pins each runner profile''s SOUL and skills'
+        Assert ([IO.File]::ReadAllText((Join-Path $research 'team\shared\team-home.txt')) -ceq $research) 'Runner records its team home'
+        $service = [IO.File]::ReadAllText((Join-Path $research 'service.json')) | ConvertFrom-Json
+        Assert (@($service.runners).Count -eq 4 -and @($service.runners | Where-Object role -ceq 'research-reviewer').Count -eq 2 -and $service.runners[0].task_timeout -eq 10800) 'Service runs scout, worker and two reviewer slots with the chosen time limit'
+        Assert ($service.coordinator.enabled -and $service.coordinator.task_timeout -eq 10800) 'Service starts the private lead coordinator with the chosen deadline'
+        Assert ($service.gateway.port -eq 18400 -and (Get-Content -Raw -LiteralPath (Join-Path $research 'service.json')) -notmatch 'sk-ant|' + ('a' * 26)) 'Service config names the router and carries no secret'
+        $secrets = Read-Env (Join-Path $research 'private\service.env')
+        Assert ($secrets['MATTERMOST_TOKEN__research-worker'] -ceq ('c' * 26) -and -not $secrets.ContainsKey('MATTERMOST_TOKEN__research-lead') -and $secrets['RESEARCH_GATEWAY_SECRET'] -cmatch '^[a-f0-9]{48}$') 'Each runner gets its own bot token; the lead''s stays in its profile'
+        $gwEnv = Read-Env (Join-Path $research 'gateway\env')
+        Assert ($gwEnv['ANTHROPIC_API_KEY'] -ceq 'sk-ant-fixture-0123456789abcdef' -and -not $gwEnv.ContainsKey('OPENAI_API_KEY') -and $gwEnv['RESEARCH_GATEWAY_SECRET'] -ceq $secrets['RESEARCH_GATEWAY_SECRET']) 'Provider keys live only in the router env'
+        $models = [IO.File]::ReadAllText((Join-Path $research 'gateway\models.json')) | ConvertFrom-Json
+        Assert (($models.cloud -join ',') -ceq 'anthropic' -and $models.local.model -ceq 'qwen3') 'Router renders the chosen cloud and local models'
+        Assert (@($script:tasks.Keys).Count -eq 2 -and @($script:tasks.Values | Where-Object { $_.State -ceq 'Running' }).Count -eq 2) 'Two owned logon tasks registered and running: team service and lead chat'
+        $leadTask = @($script:tasks.Values | Where-Object { $_.TaskName -like '*lead chat' })[0]
+        Assert ($leadTask.Description -like 'HermesEasySetup.ResearchTeam.v2; owner=*; profile=research-lead') 'Lead chat task is owned by this team'
+        Assert ((Test-Path -LiteralPath (Join-Path $paths.Workspace '_template\CLAUDE.md')) -and (Test-Path -LiteralPath (Join-Path $paths.Workspace 'reports\.git')) -and (Test-Path -LiteralPath (Join-Path $paths.Workspace 'reports\.tasks\project.json')) -and (Test-Path -LiteralPath (Join-Path $paths.Workspace '.hermes.md'))) 'Workspace gets _template, team context and the reports board'
+        Assert ($result.LocationsPath -ceq (Join-Path $paths.Workspace 'RESEARCH_PATHS.md') -and (Test-Path -LiteralPath $result.LocationsPath -PathType Leaf) -and [IO.File]::ReadAllText((Join-Path $research 'workspace-root.txt'), [Text.Encoding]::UTF8).Trim() -ceq $paths.Workspace) 'Install reports the generated location guide and remembers the workspace'
+        $state = [IO.File]::ReadAllText((Join-Path $research 'team.json')) | ConvertFrom-Json
+        Assert ($state.Manager -ceq 'HermesEasySetup.ResearchTeam.v2' -and @($state.Profiles).Count -eq 4 -and ($state | ConvertTo-Json -Depth 8) -notmatch ('a' * 26)) 'Team record has four profiles and no secret'
 
-        $paths = New-FixturePaths 'valid 한글 경로'
-        $personalFile = Join-Path $paths.HermesHome 'profiles\personal\keep.txt'
-        New-Item -ItemType Directory -Path (Split-Path -Parent $personalFile) -Force | Out-Null
-        [IO.File]::WriteAllText($personalFile, 'personal profile must remain byte exact', (New-Object Text.UTF8Encoding($false)))
-        $personalBefore = Read-TextHash $personalFile
-        $output = @(Invoke-HermesResearchTeamSetup -InputObject $script:input @paths)
-        Assert ($output.Count -eq 1 -and -not $output[0].Succeeded -and $output[0].PartialSuccess -and $output[0].ExecutionMode -ceq 'GovernedBroker' -and $output[0].Profiles.Count -eq 4) 'Pending broker setup returns one partial four-role result, never success'
-        $result = $output[0]
-        Assert (-not $result.ExecutionReady -and @($result.PendingSettings).Count -eq 2 -and -not $result.WorkflowTest.Passed) 'Unset policy and unrun live test are pending rather than execution-ready'
-        Assert ((Read-TextHash $personalFile) -ceq $personalBefore) 'Unrelated personal profile remains byte exact'
-        Assert ((Count-ProfileCommands) -eq 4) 'Only four explicit profile-create commands are issued'
-        $profileCalls = @($script:processes | Where-Object { $_.Arguments.Count -ge 1 -and $_.Arguments[0] -ceq 'profile' })
-        Assert (@($profileCalls | Where-Object { $_.Arguments.Count -ne 4 -or $_.Arguments[3] -cne '--no-alias' }).Count -eq 0) 'Every profile create disables global alias mutation'
-        $platformCalls = @($script:processes | Where-Object {
-            $_.Arguments.Count -eq 8 -and $_.Arguments[3] -like '*\profile_config.py'
-        })
-        Assert ($platformCalls.Count -eq 4) 'Every research profile receives one isolated bulk configuration edit'
-        $expectedCommand = Join-Path $paths.InstallDir 'venv\Scripts\python.exe'
-        foreach ($agent in @($script:input.Agents)) {
-            $agentCalls = @($platformCalls | Where-Object { $_.Arguments[7] -ceq (Join-Path $paths.HermesHome ('profiles\' + $agent.ProfileName)) })
-            Assert ($agentCalls.Count -eq 1 -and
-                @($agentCalls | Where-Object { $_.Arguments[5] -cne $paths.InstallDir -or $_.FilePath -cne $expectedCommand -or $_.Environment.HERMES_HOME -cne $paths.HermesHome }).Count -eq 0) "Profile $($agent.ProfileName) isolates native platforms using only its selected installation"
-        }
-        Assert ($script:requests.Count -eq 12 -and @($script:requests | Where-Object { $_.MaximumRedirection -ne 0 }).Count -eq 0) 'Four bot identities and channel memberships are checked without redirects'
+        # --- Re-running needs the explicit reset choice; with it the same team is updated ---
+        Reject { Invoke-Setup $paths $teamInput } 'A second install without reset is refused' '재설정'
+        $again = Invoke-Setup $paths $teamInput -Resume
+        Assert ($again.Succeeded -and @($script:tasks.Keys).Count -eq 2) 'Reset updates the same team and tasks'
+        Assert ((Read-Env (Join-Path $research 'gateway\env'))['RESEARCH_GATEWAY_SECRET'] -ceq $secrets['RESEARCH_GATEWAY_SECRET']) 'Router secret survives a reset'
 
-        $policy = Get-HermesResearchPolicy -RuntimeRoot $paths.RuntimeRoot
-        $stateText = [IO.File]::ReadAllText($result.StatePath)
-        $privatePath = Join-Path $paths.RuntimeRoot 'research\private.json'
-        $privateText = [IO.File]::ReadAllText($privatePath)
-        $private = $privateText | ConvertFrom-Json
-        foreach ($persona in @($script:manifest.Personas)) {
-            $expected = $expectedBindings[[string]$persona.CanonicalName]
-            $agent = @($script:input.Agents | Where-Object { $_.RoleId -ceq $expected[0] })[0]
-            $profile = @($result.Profiles | Where-Object { $_.CanonicalRole -ceq $persona.CanonicalName })[0]
-            $profileDir = Join-Path $paths.HermesHome ('profiles\' + $agent.ProfileName)
-            $soulPath = Join-Path $profileDir 'SOUL.md'
-            $envText = [IO.File]::ReadAllText((Join-Path $profileDir '.env'))
-            $policyEntry = $policy.roles.PSObject.Properties[[string]$persona.CanonicalName].Value
-            $privateBot = $private.bots.PSObject.Properties[[string]$persona.CanonicalName].Value
-            $nativeCredentialLines = @($envText -split "`r?`n" | Where-Object {
-                $_ -match '^\s*(MATTERMOST_|SLACK_|DISCORD_|TELEGRAM_|WHATSAPP_|SIGNAL_|IMESSAGE_|MATRIX_)[A-Za-z0-9_]*\s*='
-            })
-            Assert ($profile.RoleId -ceq $expected[0] -and $profile.ProfileName -ceq $expected[1]) "Result preserves the known $($persona.CanonicalName) legacy binding"
-            Assert ((Read-TextHash $profile.PromptPath).ToLowerInvariant() -ceq $persona.Sha256 -and (Read-TextHash $soulPath).ToLowerInvariant() -ceq $persona.Sha256) "Prompt and SOUL keep the exact $($persona.CanonicalName) persona bytes"
-            Assert ([string]$policyEntry.prompt_sha256 -ceq $persona.Sha256.ToLowerInvariant()) "Policy pins the exact $($persona.CanonicalName) prompt digest"
-            Assert ($envText.Contains('CUSTOM_KEEP=1') -and $nativeCredentialLines.Count -eq 2 -and
-                @($nativeCredentialLines | Where-Object { $_ -cnotin @('MATTERMOST_TOKEN=','MATTERMOST_URL=') }).Count -eq 0) "Profile $($agent.ProfileName) contains only explicit empty native Mattermost bindings"
-            $expectedBotUsername = 'verified_' + $agent.BotToken.Substring(0, 1)
-            Assert ([string]$privateBot.token -ceq $agent.BotToken) "Private broker service owns the $($persona.CanonicalName) token"
-            Assert ([string]$privateBot.username -ceq $expectedBotUsername -and [string]$privateBot.username -cne [string]$agent.DisplayName) "Private broker service persists the REST-verified $($persona.CanonicalName) username, not its display name"
-        }
-        Assert ($private.messaging.reply_in_thread -is [bool] -and $private.messaging.reply_in_thread -and
-            $private.messaging.bot_replies_require_mention -is [bool] -and $private.messaging.bot_replies_require_mention -and
-            @($private.messaging.bot_observers).Count -eq 1 -and [string]$private.messaging.bot_observers[0] -ceq 'manager') 'Private broker service persists strict threaded mention routing with manager-only bot observation'
-
-        $publicText = ($result | ConvertTo-Json -Depth 12) + $stateText + ([IO.File]::ReadAllText($result.PolicyPath))
-        foreach ($agent in @($script:input.Agents)) {
-            Assert (-not $publicText.Contains($agent.BotToken)) 'Tokens stay out of result, public state and policy'
-        }
-        Assert ($script:protectedRoots.Count -eq 1 -and $script:protectedRoots[0] -ceq (Join-Path $paths.RuntimeRoot 'research')) 'Research private root protection is requested before secret storage'
-
-        $preflightCalls = @($script:processes | Where-Object { $_.Arguments.Count -eq 9 -and $_.Arguments[4] -ceq 'check' })
-        $finalCheckCalls = @($script:processes | Where-Object { $_.Arguments.Count -eq 7 -and $_.Arguments[4] -ceq 'check' })
-        Assert ($preflightCalls.Count -eq 1 -and $preflightCalls[0].FilePath -ceq $script:pinnedPython -and
-            $preflightCalls[0].Arguments[0] -ceq '-I' -and $preflightCalls[0].Arguments[1] -ceq '-S' -and $preflightCalls[0].Arguments[2] -ceq '-B' -and
-            $preflightCalls[0].Arguments[7] -ceq '--config') 'Candidate policy is checked in isolated Python before profile mutation'
-        Assert ($finalCheckCalls.Count -eq 1 -and $finalCheckCalls[0].FilePath -ceq $script:pinnedPython -and
-            $finalCheckCalls[0].Arguments[5] -ceq '--root' -and $finalCheckCalls[0].Arguments[6] -ceq (Join-Path $paths.RuntimeRoot 'research')) 'Final service bindings are checked with the selected Python and research root'
-        Assert ($script:tasks.Count -eq 1 -and $script:taskStarts -eq 1 -and $script:heartbeatCalls.Count -eq 1) 'One governed broker service task is registered, started and heartbeat-checked'
-        $task = @($script:tasks.Values)[0]
-        Assert ($task.Principal.LogonType -ceq 'Interactive' -and $task.Principal.RunLevel -ceq 'Limited' -and $task.Triggers[0].AtLogOn) 'Broker task is current-user limited and logon-triggered'
-        $runner = Join-Path $paths.RuntimeRoot 'research\services\governed-team\Start-Gateway.ps1'
-        $runnerText = [IO.File]::ReadAllText($runner)
-        Assert ($runnerText.Contains('-I -S -B') -and $runnerText.Contains('broker.py') -and $runnerText.Contains('serve --root')) 'Broker task runner starts only the isolated governed service'
-        $invocationText = ($script:processes | ConvertTo-Json -Depth 8) + $runnerText
-        Assert (-not $invocationText.Contains('--replace') -and -not $invocationText.Contains('gateway run')) 'Setup never invokes or scripts a native gateway replacement'
-        foreach ($agent in @($script:input.Agents)) { Assert (-not $runnerText.Contains($agent.BotToken)) 'Broker runner contains no private token' }
-
-        $existingPaths = New-FixturePaths 'existing-preserve'
-        $existingPersonal = Join-Path $existingPaths.HermesHome 'profiles\personal\keep.txt'
-        New-Item -ItemType Directory -Path (Split-Path -Parent $existingPersonal) -Force | Out-Null
-        [IO.File]::WriteAllText($existingPersonal, 'existing personal profile')
-        $beforeExisting = $script:processes.Count
-        $existingResult = Invoke-HermesResearchTeamSetup -InputObject $script:input @existingPaths -UseExistingHermes
-        $existingCalls = @($script:processes | Select-Object -Skip $beforeExisting)
-        Assert ($existingResult.PartialSuccess -and -not $existingResult.Succeeded -and $existingResult.RuntimeKind -ceq 'Existing' -and $existingResult.ExistingGatewayLifecyclePreserved) 'Existing runtime without live test remains partial and preserves its personal gateway lifecycle'
-        Assert ([IO.File]::ReadAllText($existingPersonal) -ceq 'existing personal profile') 'Existing runtime preserves unrelated profiles'
-        Assert (@($existingCalls | Where-Object { @($_.Arguments | Where-Object { $_ -ceq '--replace' -or $_ -ceq 'gateway' }).Count -gt 0 }).Count -eq 0) 'Existing runtime issues no gateway lifecycle argument'
-        $existingCheck = @($existingCalls | Where-Object { $_.Arguments.Count -eq 7 -and $_.Arguments[4] -ceq 'check' })
-        Assert ($existingCheck.Count -eq 1 -and $existingCheck[0].FilePath -ceq $script:existingPython) 'Existing runtime final service check uses its verified Python fixture'
-
-        $foreignPaths = New-FixturePaths 'foreign-task'
-        $owner = Get-HermesResearchCurrentUserSID
-        $foreignPlan = Get-HermesResearchTaskPlan -ProfileName 'governed-team' -HermesHome $foreignPaths.HermesHome -RuntimeRoot $foreignPaths.RuntimeRoot -OwnerSID $owner -TeamID ('f' * 32) -PowerShellPath (Get-HermesPowerShellExecutable)
-        $script:tasks[$foreignPlan.TaskName] = [pscustomobject]@{
-            TaskName = $foreignPlan.TaskName; Description = 'Foreign task'; State = 'Ready'
-            Actions = @([pscustomobject]@{ Execute = $foreignPlan.Execute; Arguments = $foreignPlan.Arguments })
-            Principal = [pscustomobject]@{ UserId = $owner; LogonType = 'Interactive'; RunLevel = 'Limited' }
-        }
-        $beforeForeignProcesses = $script:processes.Count
-        $beforeForeignProtect = $script:protectedRoots.Count
-        Reject { Invoke-HermesResearchTeamSetup -InputObject $script:input @foreignPaths } 'Foreign broker task ownership is rejected'
-        Assert ((Count-ProfileCommands -Skip $beforeForeignProcesses) -eq 0 -and $script:protectedRoots.Count -eq $beforeForeignProtect) 'Foreign task rejection occurs before profile or private-root mutation'
-
-        $collisionPaths = New-FixturePaths 'foreign-profile'
-        $collisionMarker = Join-Path $collisionPaths.HermesHome 'profiles\research-reviewer\keep.txt'
-        New-Item -ItemType Directory -Path (Split-Path -Parent $collisionMarker) -Force | Out-Null
-        [IO.File]::WriteAllText($collisionMarker, 'foreign research profile')
-        $beforeCollision = $script:processes.Count
-        Reject { Invoke-HermesResearchTeamSetup -InputObject $script:input @collisionPaths -ReuseExistingProfiles } 'Unowned research profile collision is rejected'
-        Assert ((Count-ProfileCommands -Skip $beforeCollision) -eq 0 -and [IO.File]::ReadAllText($collisionMarker) -ceq 'foreign research profile') 'All profile collisions are checked before mutation'
-
-        $racePaths = New-FixturePaths 'profile-race'
-        $script:injectForeignProfileName = 'research-worker'
-        $beforeRace = $script:processes.Count
-        Reject { Invoke-HermesResearchTeamSetup -InputObject $script:input @racePaths } 'Profile created after preflight is never claimed as wizard-owned'
-        $raceMarker = Join-Path $racePaths.HermesHome 'profiles\research-worker\keep.txt'
-        Assert ((Count-ProfileCommands -Skip $beforeRace) -eq 0 -and (Test-Path -LiteralPath $raceMarker -PathType Leaf) -and [IO.File]::ReadAllText($raceMarker) -ceq 'concurrent foreign profile') 'TOCTOU profile collision is rechecked before any profile mutation'
-        $script:injectForeignProfileName = ''
-
-        $blockedPaths = New-FixturePaths 'blocked-auth'
+        # --- Refusals that change nothing ---
+        $foreign = New-FixturePaths 'foreign'
+        New-Item -ItemType Directory -Path (Join-Path $foreign.HermesHome 'profiles\research-reviewer') -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $foreign.HermesHome 'profiles\research-reviewer\SOUL.md'), 'someone else')
+        Reject { Invoke-Setup $foreign (New-Input $foreign) } 'An unowned profile with a team name stops the install' 'research-reviewer'
+        Assert (-not (Test-Path -LiteralPath (Join-Path $foreign.HermesHome 'profiles\research-lead')) -and [IO.File]::ReadAllText((Join-Path $foreign.HermesHome 'profiles\research-reviewer\SOUL.md')) -ceq 'someone else') 'Nothing was created or changed'
+        $codexPaths = New-FixturePaths 'codex'
         $script:loggedIn = $false
-        Reject { Invoke-HermesResearchTeamSetup -InputObject $script:input @blockedPaths } 'Missing Codex auth blocks setup'
-        Assert (-not (Test-Path -LiteralPath $blockedPaths.RuntimeRoot)) 'Auth failure creates no runtime state'
+        Reject { Invoke-Setup $codexPaths (New-Input $codexPaths -Mode Codex) } 'Codex direct mode needs a Codex login' 'Codex'
         $script:loggedIn = $true
-        $script:verified = $false
-        Reject { Invoke-HermesResearchTeamSetup -InputObject $script:input @blockedPaths } 'Unverified install blocks setup'
-        Assert (-not (Test-Path -LiteralPath $blockedPaths.RuntimeRoot)) 'Install verification failure creates no runtime state'
-        $script:verified = $true
-        $script:duplicateBot = $true
-        Reject { Invoke-HermesResearchTeamSetup -InputObject $script:input @blockedPaths } 'Duplicate bot identities fail membership preflight'
-        Assert (-not (Test-Path -LiteralPath $blockedPaths.RuntimeRoot)) 'Bot identity failure creates no runtime state'
-        $script:duplicateBot = $false
-        $script:badMembership = $true
-        Reject { Invoke-HermesResearchTeamSetup -InputObject $script:input @blockedPaths } 'Missing channel membership fails preflight'
-        $script:badMembership = $false
-        $script:rawHTTPFailure = $true
-        $message = ''
-        try { Invoke-HermesResearchTeamSetup -InputObject $script:input @blockedPaths | Out-Null } catch { $message = $_.Exception.Message }
-        Assert ($message.Length -gt 0 -and -not $message.Contains($script:secret)) 'REST failures never reflect a bot token'
-        $script:rawHTTPFailure = $false
-
-        foreach ($failure in @(
-            [pscustomobject]@{ Name = 'nonzero'; Exit = 9; Malformed = $false; Verified = $true; Errors = @() }
-            [pscustomobject]@{ Name = 'malformed'; Exit = 0; Malformed = $true; Verified = $true; Errors = @() }
-            [pscustomobject]@{ Name = 'hash'; Exit = 0; Malformed = $false; Verified = $false; Errors = @() }
-            [pscustomobject]@{ Name = 'policy-error'; Exit = 0; Malformed = $false; Verified = $true; Errors = @('invalid policy') }
-        )) {
-            $failurePaths = New-FixturePaths ('failed-check-' + $failure.Name)
-            $script:checkExitCode = $failure.Exit
-            $script:checkMalformed = $failure.Malformed
-            $script:checkPayload = [ordered]@{ ready = $false; prompts_verified = [bool]$failure.Verified; pending_reasons = @('failure'); errors = @($failure.Errors); native_tools_enabled = $false }
-            $beforeTasks = $script:tasks.Count
-            $beforeStarts = $script:taskStarts
-            Reject { Invoke-HermesResearchTeamSetup -InputObject $script:input @failurePaths } "Failed $($failure.Name) policy check returns no success"
-            Assert ($script:tasks.Count -eq $beforeTasks -and $script:taskStarts -eq $beforeStarts) "Failed $($failure.Name) policy check never registers or starts a service"
+        $codexResult = Invoke-Setup $codexPaths (New-Input $codexPaths -Mode Codex)
+        $writerConfig = [IO.File]::ReadAllText((Join-Path $codexPaths.HermesHome 'profiles\research-worker\config.yaml'))
+        Assert ($codexResult.Succeeded -and $writerConfig.Contains('provider: openai-codex') -and -not (Test-Path -LiteralPath (Join-Path $codexPaths.RuntimeRoot 'research\gateway\env'))) 'Codex direct mode configures every profile for Codex and installs no router'
+        $muxPaths = New-FixturePaths 'mux'
+        $script:multiplex = 'on'
+        New-Item -ItemType Directory -Path $muxPaths.HermesHome -Force | Out-Null
+        $muxConfig = Join-Path $muxPaths.HermesHome 'config.yaml'
+        [IO.File]::WriteAllText($muxConfig,"gateway:`n  multiplex_profiles: true`npersonal: keep`n")
+        $muxHash = (Get-FileHash -LiteralPath $muxConfig -Algorithm SHA256).Hash
+        $muxResult = Invoke-Setup $muxPaths (New-Input $muxPaths)
+        Assert ($muxResult.Succeeded -and (Get-FileHash -LiteralPath $muxConfig -Algorithm SHA256).Hash -ceq $muxHash) 'Supported native multiplex installs without editing personal gateway config'
+        foreach ($profile in @('research-lead','research-scout','research-worker','research-reviewer')) {
+            $cfg = [IO.File]::ReadAllText((Join-Path $muxPaths.HermesHome ('profiles\'+$profile+'\config.yaml')))
+            Assert ($cfg.Contains('standalone: true') -and $cfg.Contains('multiplex_profiles: false')) ('Research-only isolation installed: '+$profile)
         }
-        $script:checkExitCode = 0
-        $script:checkMalformed = $false
-        $script:checkPayload = [ordered]@{ ready = $false; prompts_verified = $true; pending_reasons = @('pending'); errors = @(); native_tools_enabled = $false }
-        $script:finalCheckError = $true
-        $finalFailurePaths = New-FixturePaths 'failed-final-service-check'
-        $beforeFinalFailureTasks = $script:tasks.Count
-        $beforeFinalFailureStarts = $script:taskStarts
-        Reject { Invoke-HermesResearchTeamSetup -InputObject $script:input @finalFailurePaths } 'Failed final service-binding check returns no success'
-        Assert ($script:tasks.Count -eq $beforeFinalFailureTasks -and $script:taskStarts -eq $beforeFinalFailureStarts) 'Failed final service-binding check never registers or starts a service'
-        $script:finalCheckError = $false
+        $muxLeadTask = @($script:tasks.Values | Where-Object { $_.TaskName -like '*lead chat' -and $_.Actions.Arguments -like ('*'+$muxPaths.RuntimeRoot+'*') })
+        Assert ($muxLeadTask.Count -eq 1) 'Only the owned lead chat task is registered for the multiplex case'
+        $script:standaloneSupport = $false
+        $muxLegacy = New-FixturePaths 'mux legacy'
+        Reject { Invoke-Setup $muxLegacy (New-Input $muxLegacy) } 'Unsupported multiplex still stops before profile creation' 'multiplex'
+        $script:standaloneSupport = $true
+        $script:multiplex = 'off'
+        $leakPaths = New-FixturePaths 'leak'
+        $leak = New-Input $leakPaths
+        $leak.Agents[1].DisplayName = 'a' * 26
+        Reject { Invoke-Setup $leakPaths $leak } 'A bot token used as a display name is refused'
+        $failPaths = New-FixturePaths 'live fail'
+        $script:selftestPassed = $false
+        $failed = Invoke-Setup $failPaths (New-Input $failPaths)
+        Assert (-not $failed.Succeeded -and $failed.PartialSuccess -and ($failed.PendingSettings -join ' ').Contains('LiveTestPending')) 'A failed live test is reported as not ready, not as success'
+        $script:selftestPassed = $true
 
-        Write-Host ('Research runtime tests passed: ' + $script:passed)
+        # --- Migrating a PC that has the earlier four-role broker team ---
+        $old = New-FixturePaths 'broker team'
+        $oldRoot = Join-Path $old.RuntimeRoot 'research'
+        New-Item -ItemType Directory -Path $oldRoot -Force | Out-Null
+        foreach ($name in @('research-lead','research-scout','research-worker','research-reviewer')) {
+            $dir = Join-Path $old.HermesHome ('profiles\' + $name)
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            [IO.File]::WriteAllText((Join-Path $dir 'SOUL.md'), "old persona $name")
+            [IO.File]::WriteAllText((Join-Path $dir 'config.yaml'), "platforms:`n  mattermost:`n    enabled: false`n")
+            [IO.File]::WriteAllText((Join-Path $dir 'sessions.db'), "history $name")
+        }
+        $null = Test-HermesInstallation -HermesHome $old.HermesHome -InstallDir $old.InstallDir -RuntimeRoot $old.RuntimeRoot -LogPath ''
+        $oldPaths = Get-HermesDefaultPaths -HermesHome $old.HermesHome -InstallDir $old.InstallDir -RuntimeRoot $old.RuntimeRoot
+        $legacy = [pscustomobject]@{ SchemaVersion = 1; Manager = 'HermesEasySetup.Research.v1'; OwnerSID = 'S-1-5-21-1234-5678-9012-1001'; TeamID = 'b' * 32
+            HermesHome = $oldPaths.HermesHome; InstallDir = $oldPaths.InstallDir; RuntimeRoot = $oldPaths.RuntimeRoot; ServerURL = 'http://127.0.0.1:8065'; HomeChannelID = 'c' * 26
+            Profiles = @('research-lead','research-scout','research-worker','research-reviewer' | ForEach-Object { [pscustomobject]@{ ProfileName = $_; OwnsProfile = $true; GatewayTask = $null } }) }
+        [IO.File]::WriteAllText((Join-Path $oldRoot 'team.json'), ($legacy | ConvertTo-Json -Depth 5))
+        $script:migrationCalls = New-Object System.Collections.Generic.List[string]
+        function script:Get-HermesResearchMigrationTasks { param($Prior, $Paths, $BrokerPlan) $script:migrationCalls.Add('tasks:' + $BrokerPlan.Description.Split(';')[0]); return @() }
+        function script:Enter-HermesResearchMaintenance { param($ResearchRoot, $Tasks, $BrokerPlan, $Python) $script:migrationCalls.Add('maintenance'); return $null }
+        function script:Assert-HermesResearchBrokerIdle { param($ResearchRoot, $Python, $Environment) $script:migrationCalls.Add('idle') }
+        function script:Backup-HermesResearchMigration { param($Paths, $Prior, $Tasks) $script:migrationCalls.Add('backup'); return (Join-Path $oldRoot 'migrations\fixture') }
+        function script:Stop-HermesResearchMigrationTasks { param($Tasks, $BrokerIdentity) $script:migrationCalls.Add('stop') }
+        function script:Exit-HermesResearchMaintenance { param($ResearchRoot) $script:migrationCalls.Add('exit') }
+        $migrationInput = New-Input $old
+        Reject { Invoke-Setup $old $migrationInput } 'An earlier broker team is not replaced without the migration consent' '전환'
+        Assert ($script:migrationCalls.Count -eq 0 -and [IO.File]::ReadAllText((Join-Path $old.HermesHome 'profiles\research-lead\SOUL.md')) -ceq 'old persona research-lead') 'Refused migration touched nothing'
+        $migrationInput.WizardOptions.MigrationConsent = $true
+        $migrated = Invoke-Setup $old $migrationInput
+        Assert ($migrated.Succeeded -and ($script:migrationCalls -join ',') -ceq 'tasks:HermesEasySetup.Research.v1,maintenance,idle,backup,stop,exit') 'Migration waits for the broker to go idle, backs up, then stops it — in that order'
+        Assert ($migrated.MigrationBackupPath -like '*migrations*') 'The backup location is reported'
+        Assert ([IO.File]::ReadAllText((Join-Path $old.HermesHome 'profiles\research-lead\SOUL.md')) -ceq [IO.File]::ReadAllText((Join-Path (Get-HermesResearchTeamSourceRoot) 'research-lead\SOUL.md')) -and (Test-Path -LiteralPath (Join-Path $old.HermesHome 'profiles\research-lead\.research-team'))) 'research-lead uses the complete original persona'
+        Assert ([IO.File]::ReadAllText((Join-Path $old.HermesHome 'profiles\research-lead\sessions.db')) -ceq 'history research-lead') 'Taken-over profile keeps its history'
+        $fixCall = @($script:processes | Where-Object { $_.Arguments.Count -ge 5 -and $_.Arguments[1] -ceq '-c' -and $_.Arguments[3] -like '*research-lead*config.yaml' })[-1]
+        Assert ($fixCall.Arguments[4] -ceq '1') 'research-lead gets Mattermost re-enabled after the broker had disabled it'
+        foreach ($name in @('research-scout','research-worker')) {
+            Assert ([IO.File]::ReadAllText((Join-Path $old.HermesHome ('profiles\' + $name + '\SOUL.md'))) -ceq [IO.File]::ReadAllText((Join-Path (Get-HermesResearchTeamSourceRoot) ($name + '\SOUL.md'))) -and (Test-Path -LiteralPath (Join-Path $old.HermesHome ('profiles\' + $name + '\.research-team')))) "$name adopts the complete persona with owned migration"
+            Assert ([IO.File]::ReadAllText((Join-Path $old.HermesHome ('profiles\' + $name + '\sessions.db'))) -ceq "history $name") "$name history is preserved"
+        }
+        $newState = [IO.File]::ReadAllText((Join-Path $oldRoot 'team.json')) | ConvertFrom-Json
+        Assert ($newState.Manager -ceq 'HermesEasySetup.ResearchTeam.v2' -and $newState.TeamID -ceq ('b' * 32)) 'The team record moves to the new team, keeping its id'
     } finally {
-        $resolved = [IO.Path]::GetFullPath($script:fixtureRoot)
-        $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
-        if ($resolved.StartsWith($tempBase, [StringComparison]::OrdinalIgnoreCase) -and (Split-Path -Leaf $resolved) -like 'hermes-research-tests-*') {
-            Remove-Item -LiteralPath $resolved -Recurse -Force
-        }
+        if (Test-Path -LiteralPath $script:fixtureRoot) { Remove-Item -LiteralPath $script:fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue }
     }
+    Write-Host "PASS research team installer ($script:passed assertions)" -ForegroundColor Green
 }
+exit 0

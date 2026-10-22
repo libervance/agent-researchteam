@@ -17,10 +17,10 @@ foreach ($name in @(
     'HermesPlanButton','HermesStatusButton','HermesPlanText','HermesConsent','HermesInstallButton',
     'UseExistingHermesCheck','ExistingHermesHome','ExistingHermesInstallDir','ExistingHermesStatus',
     'AuthButton','AuthOpenButton','AuthStatus','AuthCode','ModelCombo','HermesNextButton',
-    'TeamServerURL','HomeChannelID','TeamAdminPassword','AgentRows','RoleEditorCombo','RoleName','RoleInstructions','RoleSaveButton',
-    'PersonaResetButton','PolicyJson','PolicyLoadButton','PolicySaveButton','PolicyRoleRows','PolicyDefaultsButton',
-    'WorkspacePath','WorkspaceBrowseButton','HumanUsername','SelectedModelSummary','ModelEgressConsent','PublicWebConsent','MigrationConsent',
-    'TeamResumeCheck','TeamConsent','TeamApplyButton','TeamOpenButton','TeamResult','Progress','Log','CloseButton'
+    'TeamServerURL','HomeChannelID','TeamAdminPassword','AgentRows','TeamQuickActions','TeamAdvancedSettings','QuickSetupSummary',
+    'ModelModeGateway','ModelModeCodex','GatewayPanel','AnthropicKey','OpenAIKey','LocalBaseURL','LocalModel','GatewayPort',
+    'WorkspacePath','WorkspaceBrowseButton','HumanUsername','TaskTimeoutMinutes','ReviewerSlots','SelectedModelSummary','ModelEgressConsent','PublicWebConsent','MigrationConsent',
+    'TeamResumeCheck','TeamConsent','TeamApplyButton','TeamOpenButton','TeamBoardButton','TeamResult','Progress','Log','CloseButton'
 )) {
     $ui[$name] = $window.FindName($name)
     if ($null -eq $ui[$name]) { throw "필수 연구실 컨트롤이 없습니다: $name" }
@@ -30,9 +30,8 @@ $script:defaultPaths = $script:paths
 $script:useExistingHermes = $false
 $ui.ExistingHermesHome.Text = $script:paths.HermesHome
 $ui.ExistingHermesInstallDir.Text = $script:paths.InstallDir
-$script:roles = @(Get-HermesResearchRoles -RuntimeRoot $script:paths.RuntimeRoot)
-$ui.PolicyJson.Text = (Get-HermesResearchPolicy -RuntimeRoot $script:paths.RuntimeRoot | ConvertTo-Json -Depth 15)
-$script:policyRows = @{}
+$script:teamDefinition = @(Get-HermesResearchTeamDefinition)
+foreach ($slots in 1..3) { [void]$ui.ReviewerSlots.Items.Add([string]$slots) }
 $script:teamInputsEdited = $false
 $script:restoringTeam = $false
 $script:lastLoadedTeamKey = $null
@@ -60,6 +59,8 @@ $script:pendingLine = $null
 $script:stderr = $null
 $script:inputPath = $null
 $script:botIndex = -1
+$script:autoSetup = $false
+$script:autoReady = $false
 $script:preferredModel = $null
 
 function Add-ResearchLog {
@@ -75,10 +76,13 @@ function Refresh-ResearchButtons {
     $ui.CloseButton.IsEnabled = $idle
     foreach ($name in @('DockerCheckButton','DockerGuideButton','ServerRestoreButton','ServerId','ServerPort',
         'AdminUsername','AdminEmail','AdminPassword','PasswordConfirm','ServerResumeCheck','ServerConsent',
-        'HermesConsent','UseExistingHermesCheck','TeamAdminPassword','TeamResumeCheck','TeamConsent','RoleEditorCombo','RoleName','RoleInstructions','RoleSaveButton','PersonaResetButton','PolicyJson','PolicyLoadButton','PolicySaveButton',
-        'WorkspacePath','WorkspaceBrowseButton','HumanUsername','ModelEgressConsent','PublicWebConsent','MigrationConsent','PolicyDefaultsButton','PolicyRoleRows')) {
+        'HermesConsent','UseExistingHermesCheck','TeamAdminPassword','TeamResumeCheck','TeamConsent',
+        'ModelModeGateway','ModelModeCodex','WorkspacePath','WorkspaceBrowseButton','HumanUsername','TaskTimeoutMinutes','ReviewerSlots',
+        'ModelEgressConsent','PublicWebConsent','MigrationConsent')) {
         $ui[$name].IsEnabled = $idle
     }
+    $gatewayMode = ($ui.ModelModeGateway.IsChecked -eq $true)
+    foreach ($name in @('AnthropicKey','OpenAIKey','LocalBaseURL','LocalModel','GatewayPort')) { $ui[$name].IsEnabled = $idle -and $gatewayMode }
     $ui.DockerOpenButton.IsEnabled = $idle -and $script:dockerCanOpen
     $ui.DockerInstallConsent.IsEnabled = $idle -and $script:dockerCanInstall
     $ui.DockerInstallButton.IsEnabled = $idle -and $script:dockerCanInstall -and $ui.DockerInstallConsent.IsChecked -eq $true
@@ -98,71 +102,30 @@ function Refresh-ResearchButtons {
     }
     $ui.AuthOpenButton.IsEnabled = $null -ne $script:authURL
     $ui.ModelCombo.IsEnabled = $idle -and $script:authenticated
-    $ui.HermesNextButton.IsEnabled = $idle -and $script:authenticated -and $null -ne $ui.ModelCombo.SelectedItem
-    $ui.TeamTab.IsEnabled = $script:serverReady -and $script:authenticated
-    $ui.TeamApplyButton.IsEnabled = $idle -and $ui.TeamTab.IsEnabled -and $null -ne $ui.ModelCombo.SelectedItem -and $ui.TeamConsent.IsChecked -eq $true -and $ui.ModelEgressConsent.IsChecked -eq $true -and $ui.PublicWebConsent.IsChecked -eq $true
-    $ui.SelectedModelSummary.Text = $(if ($null -ne $ui.ModelCombo.SelectedItem) { '네 역할에 적용할 모델: ' + [string]$ui.ModelCombo.SelectedItem } else { '모델: 2단계에서 인증한 공통 모델을 네 역할에 적용합니다.' })
+    $ui.HermesNextButton.IsEnabled = $idle -and $script:hermesReady
+    $ui.TeamTab.IsEnabled = $script:serverReady -and $script:hermesReady
+    $modelReady = $gatewayMode -or ($script:authenticated -and $null -ne $ui.ModelCombo.SelectedItem)
+    $ui.TeamApplyButton.IsEnabled = $idle -and $ui.TeamTab.IsEnabled -and $modelReady -and $ui.TeamConsent.IsChecked -eq $true -and $ui.ModelEgressConsent.IsChecked -eq $true -and $ui.PublicWebConsent.IsChecked -eq $true
+    $ui.SelectedModelSummary.Text = $(if ($null -ne $ui.ModelCombo.SelectedItem -and $script:authenticated) { 'Codex 모델: ' + [string]$ui.ModelCombo.SelectedItem + ' (네 역할 공통)' } else { 'Codex 모델: 2단계에서 로그인하면 선택할 수 있습니다.' })
+    $quickModel = $(if ($gatewayMode) { '선택한 모델 라우터' } else { $ui.SelectedModelSummary.Text })
+    $ui.QuickSetupSummary.Text = ('총괄·조사·분석/집필·감사 3+1 | {0}{1}작업 폴더: {2}{1}시간 한도 {3}분/작업 · 작업 시도 50 · 모델 오류 재시도 100 · 심사자 {4}명' -f $quickModel,[Environment]::NewLine,$ui.WorkspacePath.Text,$ui.TaskTimeoutMinutes.Text,[string]$ui.ReviewerSlots.SelectedItem)
     $ui.TeamOpenButton.IsEnabled = $idle -and $script:serverReady
     foreach ($agent in $script:agents) {
         $agent.Name.IsEnabled = $idle
         $agent.Token.IsEnabled = $idle
-        $agent.Role.IsEnabled = $idle
         $agent.Issue.IsEnabled = $idle -and $script:serverReady -and $script:dockerReady
     }
 }
 
-function Add-ResearchPolicyRows {
-    $headers = @('역할','자료 읽기','시도','수정','감사','전체 초','토큰 상한','응답 토큰','응답 초')
-    $widths = @(65,65,55,50,50,70,90,85,70)
-    for ($column = 0; $column -lt $headers.Count; $column++) {
-        $definition = New-Object Windows.Controls.ColumnDefinition
-        $definition.Width = New-Object Windows.GridLength($widths[$column])
-        $ui.PolicyRoleRows.ColumnDefinitions.Add($definition)
-        $label = New-Object Windows.Controls.TextBlock
-        $label.Text = $headers[$column]; $label.Margin = '2,0,2,6'; $label.FontSize = 12
-        [Windows.Controls.Grid]::SetColumn($label,$column)
-        [void]$ui.PolicyRoleRows.Children.Add($label)
-    }
-    $ui.PolicyRoleRows.RowDefinitions.Add((New-Object Windows.Controls.RowDefinition))
-    $keys = @('attempts','revisions','audits','seconds','tokens','max_output_tokens','per_call_timeout_seconds')
-    $index = 0
-    foreach ($role in @('manager','researcher','analyst','auditor')) {
-        $index++
-        $ui.PolicyRoleRows.RowDefinitions.Add((New-Object Windows.Controls.RowDefinition))
-        $label = New-Object Windows.Controls.TextBlock
-        $label.Text = @('관리','조사','분석','감사')[$index - 1]; $label.VerticalAlignment = 'Center'
-        [Windows.Controls.Grid]::SetRow($label,$index); [void]$ui.PolicyRoleRows.Children.Add($label)
-        $read = New-Object Windows.Controls.CheckBox
-        $read.VerticalAlignment = 'Center'; $read.HorizontalAlignment = 'Center'
-        [Windows.Automation.AutomationProperties]::SetName($read,($label.Text + ' 입력 자료 읽기 허용'))
-        [Windows.Controls.Grid]::SetRow($read,$index); [Windows.Controls.Grid]::SetColumn($read,1)
-        [void]$ui.PolicyRoleRows.Children.Add($read)
-        $row = @{ ReadWorkspace = $read; Limits = @{} }
-        for ($limitIndex = 0; $limitIndex -lt $keys.Count; $limitIndex++) {
-            $box = New-Object Windows.Controls.TextBox
-            $box.Margin = '2,2,2,2'; $box.Padding = '4,5'; $box.FontSize = 12
-            [Windows.Automation.AutomationProperties]::SetName($box,($label.Text + ' ' + $headers[$limitIndex + 2]))
-            [Windows.Controls.Grid]::SetRow($box,$index); [Windows.Controls.Grid]::SetColumn($box,($limitIndex + 2))
-            [void]$ui.PolicyRoleRows.Children.Add($box)
-            $row.Limits[$keys[$limitIndex]] = $box
-        }
-        $script:policyRows[$role] = $row
-    }
-}
-
 function Set-ResearchWizardOptions {
-    param($Options, [switch]$LimitsOnly)
-    if (-not $LimitsOnly) {
-        $ui.WorkspacePath.Text = [string]$Options.WorkspacePath
-        $ui.HumanUsername.Text = [string]$Options.HumanUsername
-        # Saved installation consent is not consent for a new installation/test.
-        $ui.ModelEgressConsent.IsChecked = $false; $ui.PublicWebConsent.IsChecked = $false; $ui.MigrationConsent.IsChecked = $false
-    }
-    foreach ($role in @('manager','researcher','analyst','auditor')) {
-        $row = $script:policyRows[$role]
-        $row.ReadWorkspace.IsChecked = [bool]$Options.Roles.$role.ReadWorkspace
-        foreach ($key in $row.Limits.Keys) { $row.Limits[$key].Text = [string]$Options.Roles.$role.Limits.$key }
-    }
+    param($Options)
+    $ui.WorkspacePath.Text = [string]$Options.WorkspacePath
+    $ui.HumanUsername.Text = [string]$Options.HumanUsername
+    $ui.TaskTimeoutMinutes.Text = [string]$Options.TaskTimeoutMinutes
+    $ui.ReviewerSlots.SelectedItem = [string]$Options.ReviewerSlots
+    $ui.GatewayPort.Text = [string]$Options.GatewayPort
+    # Saved installation consent is not consent for a new installation/test.
+    $ui.ModelEgressConsent.IsChecked = $false; $ui.PublicWebConsent.IsChecked = $false; $ui.MigrationConsent.IsChecked = $false
 }
 
 function Get-ResearchWizardOptions {
@@ -170,16 +133,26 @@ function Get-ResearchWizardOptions {
     $options.AllowModelEgress = $ui.ModelEgressConsent.IsChecked -eq $true
     $options.AllowPublicWeb = $ui.PublicWebConsent.IsChecked -eq $true
     $options.MigrationConsent = $ui.MigrationConsent.IsChecked -eq $true
-    foreach ($role in @('manager','researcher','analyst','auditor')) {
-        $row = $script:policyRows[$role]
-        $options.Roles[$role].ReadWorkspace = $row.ReadWorkspace.IsChecked -eq $true
-        foreach ($key in $row.Limits.Keys) {
-            $amount = 0
-            if (-not [int]::TryParse($row.Limits[$key].Text.Trim(),[ref]$amount)) { throw ($role + ': 실행 한도에는 정수를 입력하세요.') }
-            $options.Roles[$role].Limits[$key] = $amount
-        }
+    foreach ($pair in @(@('TaskTimeoutMinutes', $ui.TaskTimeoutMinutes.Text), @('ReviewerSlots', [string]$ui.ReviewerSlots.SelectedItem), @('GatewayPort', $ui.GatewayPort.Text))) {
+        $amount = 0
+        if (-not [int]::TryParse(([string]$pair[1]).Trim(), [ref]$amount)) { throw ($pair[0] + ': 정수를 입력하세요.') }
+        $options.($pair[0]) = $amount
     }
     return (Assert-HermesResearchWizardOptions -Options $options -RuntimeRoot $script:paths.RuntimeRoot)
+}
+
+function Get-ResearchModelInput {
+    if ($ui.ModelModeCodex.IsChecked -eq $true) {
+        if ($null -eq $ui.ModelCombo.SelectedItem) { throw 'Codex 직접 연결에는 2단계의 로그인과 모델 선택이 필요합니다.' }
+        return [pscustomobject]@{ Mode = 'Codex'; CodexModel = [string]$ui.ModelCombo.SelectedItem }
+    }
+    $model = [ordered]@{ Mode = 'Gateway' }
+    if ($ui.AnthropicKey.Password) { $model.AnthropicKey = $ui.AnthropicKey.Password.Trim() }
+    if ($ui.OpenAIKey.Password) { $model.OpenAIKey = $ui.OpenAIKey.Password.Trim() }
+    if ($ui.LocalBaseURL.Text.Trim()) { $model.LocalBaseURL = $ui.LocalBaseURL.Text.Trim(); $model.LocalModel = $ui.LocalModel.Text.Trim() }
+    $value = [pscustomobject]$model
+    $null = Assert-HermesResearchModelInput $value
+    return $value
 }
 
 function Test-ResearchWorkflowEvidence {
@@ -187,14 +160,15 @@ function Test-ResearchWorkflowEvidence {
     if ($null -eq $Result -or -not $Result.PSObject.Properties['ExecutionReady'] -or $Result.ExecutionReady -ne $true -or -not $Result.PSObject.Properties['WorkflowTest']) { return $false }
     $test = $Result.WorkflowTest
     if ($null -eq $test) { return $false }
-    foreach ($key in @('Passed','Live','AuditPassed','RequestID','Roles','EvidencePath')) { if (-not $test.PSObject.Properties[$key]) { return $false } }
+    foreach ($key in @('Passed','Live','AuditPassed','Scenarios','RequestID','Roles','EvidencePath')) { if (-not $test.PSObject.Properties[$key]) { return $false } }
+    if ((@($test.Scenarios | Sort-Object -Unique) -join ',') -cne 'S1,S2,S3') { return $false }
     if ($test.Passed -ne $true -or $test.Live -ne $true -or $test.AuditPassed -ne $true -or [string]::IsNullOrWhiteSpace([string]$test.RequestID) -or [string]::IsNullOrWhiteSpace([string]$test.EvidencePath)) { return $false }
     $roles = @($test.Roles | Sort-Object -Unique)
-    return ($roles.Count -eq 4 -and ($roles -join ',') -ceq 'analyst,auditor,manager,researcher')
+    return ($roles.Count -eq 4 -and ($roles -join ',') -ceq 'research-lead,research-reviewer,research-scout,research-worker')
 }
 
 function Add-ResearchAgentRows {
-    $columns = @(160,200,0,150,105)
+    $columns = @(170,150,0,0,105)
     foreach ($width in $columns) {
         $column = New-Object Windows.Controls.ColumnDefinition
         $column.Width = $(if ($width -eq 0) { New-Object Windows.GridLength(1,[Windows.GridUnitType]::Star) } else { New-Object Windows.GridLength($width) })
@@ -203,7 +177,7 @@ function Add-ResearchAgentRows {
     $header = New-Object Windows.Controls.RowDefinition
     $header.Height = [Windows.GridLength]::Auto
     [void]$ui.AgentRows.RowDefinitions.Add($header)
-    $headers = @('독립 프로필','에이전트 이름','봇 토큰','역할','토큰 발급')
+    $headers = @('프로필 (봇 사용자 이름)','표시 이름','봇 토큰','하는 일','토큰 발급')
     for ($columnIndex = 0; $columnIndex -lt $headers.Count; $columnIndex++) {
         $label = New-Object Windows.Controls.TextBlock
         $label.Text = $headers[$columnIndex]; $label.FontWeight = 'SemiBold'; $label.Margin = '0,0,8,8'
@@ -212,94 +186,46 @@ function Add-ResearchAgentRows {
     }
     $defaults = @(New-HermesResearchDefaultAgents)
     for ($i = 0; $i -lt $defaults.Count; $i++) {
+        $definition = @($script:teamDefinition | Where-Object { $_.ProfileName -ceq $defaults[$i].ProfileName })[0]
         $row = New-Object Windows.Controls.RowDefinition; $row.Height = [Windows.GridLength]::Auto
         [void]$ui.AgentRows.RowDefinitions.Add($row)
         $profile = New-Object Windows.Controls.TextBlock
         $profile.Text = [string]$defaults[$i].ProfileName; $profile.FontSize = 12; $profile.VerticalAlignment = 'Center'
         $name = New-Object Windows.Controls.TextBox; $name.Text = [string]$defaults[$i].DisplayName
         $token = New-Object Windows.Controls.PasswordBox
-        $role = New-Object Windows.Controls.ComboBox; $role.DisplayMemberPath = 'Name'; $role.SelectedValuePath = 'Id'
-        foreach ($item in $script:roles) { [void]$role.Items.Add($item) }
-        $role.SelectedValue = [string]$defaults[$i].RoleId
-        $issue = New-Object Windows.Controls.Button; $issue.Content = '봇 발급'; $issue.Tag = $i
+        $summary = New-Object Windows.Controls.TextBlock
+        $summary.Text = [string]$definition.Summary; $summary.TextWrapping = 'Wrap'; $summary.FontSize = 12; $summary.Foreground = '#56657D'
+        $issue = New-Object Windows.Controls.Button; $issue.Content = '봇 발급'; $issue.Tag = $i; $issue.VerticalAlignment = 'Top'
         $issue.Add_Click({ param($sender,$args) Start-ResearchBotIssuance -Index ([int]$sender.Tag) })
-        [Windows.Automation.AutomationProperties]::SetName($name,('에이전트 {0} 이름' -f ($i + 1)))
-        [Windows.Automation.AutomationProperties]::SetName($token,('에이전트 {0} 봇 토큰' -f ($i + 1)))
-        [Windows.Automation.AutomationProperties]::SetName($role,('에이전트 {0} 역할' -f ($i + 1)))
-        $controls = @($profile,$name,$token,$role,$issue)
+        [Windows.Automation.AutomationProperties]::SetName($name,('{0} 표시 이름' -f $defaults[$i].ProfileName))
+        [Windows.Automation.AutomationProperties]::SetName($token,('{0} 봇 토큰' -f $defaults[$i].ProfileName))
+        $controls = @($profile,$name,$token,$summary,$issue)
         for ($columnIndex = 0; $columnIndex -lt $controls.Count; $columnIndex++) {
             $control = $controls[$columnIndex]; $control.Margin = '0,0,8,10'
             [Windows.Controls.Grid]::SetRow($control,($i + 1)); [Windows.Controls.Grid]::SetColumn($control,$columnIndex)
             [void]$ui.AgentRows.Children.Add($control)
         }
-        $script:agents += [pscustomobject]@{ ProfileName = [string]$defaults[$i].ProfileName; Name = $name; Token = $token; Role = $role; Issue = $issue }
+        $script:agents += [pscustomobject]@{ ProfileName = [string]$defaults[$i].ProfileName; Name = $name; Token = $token; Issue = $issue }
     }
 }
 
-function Refresh-ResearchRoles {
-    param([string]$SelectedId)
-    foreach ($agent in $script:agents) {
-        $oldId = [string]$agent.Role.SelectedValue
-        $agent.Role.Items.Clear()
-        foreach ($role in $script:roles) { [void]$agent.Role.Items.Add($role) }
-        $agent.Role.SelectedValue = $oldId
-    }
-    $ui.RoleEditorCombo.Items.Clear()
-    foreach ($role in $script:roles) { [void]$ui.RoleEditorCombo.Items.Add($role) }
-    $ui.RoleEditorCombo.DisplayMemberPath = 'Name'; $ui.RoleEditorCombo.SelectedValuePath = 'Id'
-    if ($SelectedId) { $ui.RoleEditorCombo.SelectedValue = $SelectedId } else { $ui.RoleEditorCombo.SelectedIndex = 0 }
-}
-
-function Get-ResearchSavedPreferences {
+function Get-ResearchSavedTeam {
     param($State)
     $ownerSID = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    if ($State.SchemaVersion -ne 1 -or $State.Manager -cne 'HermesEasySetup.Research.v1' -or
+    if ($State.SchemaVersion -ne 2 -or $State.Manager -cne 'HermesEasySetup.ResearchTeam.v2' -or
         $State.OwnerSID -cne $ownerSID -or $State.TeamID -cnotmatch '^[a-f0-9]{32}$' -or
         $State.ServerURL -cne $script:serverURL -or $State.HomeChannelID -cne $ui.HomeChannelID.Text) { throw '저장된 연구팀 소유 정보가 현재 연구실과 일치하지 않습니다.' }
     foreach ($key in @('HermesHome','InstallDir','RuntimeRoot')) {
         if ([IO.Path]::GetFullPath([string]$State.$key) -ine [IO.Path]::GetFullPath([string]$script:paths.$key)) { throw '저장된 연구팀 경로가 현재 설정과 일치하지 않습니다.' }
     }
-    $index = 0
-    $data = [pscustomobject]@{
-        SchemaVersion = 1; ServerURL = $State.ServerURL; HomeChannelID = $State.HomeChannelID
-        ModelName = $State.ModelName; Roles = $script:roles
-        # Validate public metadata without loading credentials from profiles.
-        Agents = @($State.Profiles | ForEach-Object {
-            $index++
-            [pscustomobject]@{ ProfileName = $_.ProfileName; DisplayName = $_.DisplayName; RoleId = $_.RoleId; BotToken = ('a' * 25) + [string]$index }
-        })
-    }
-    return (Assert-HermesResearchTeamInput -InputObject $data)
-}
-
-function Get-ResearchSavedConnections {
-    param($State, $Service)
-    $null = Get-ResearchSavedPreferences $State
-    if (-not $State.PSObject.Properties['ExecutionMode'] -or $State.ExecutionMode -cne 'GovernedBroker' -or $Service.schema_version -ne 1 -or
-        $Service.server_url -cne $State.ServerURL -or $Service.channel_id -cne $State.HomeChannelID) { throw '저장된 비공개 연결과 연구팀 기록이 일치하지 않습니다.' }
-    foreach ($pair in @(@('hermes_home','HermesHome'),@('install_dir','InstallDir'))) {
-        if ([IO.Path]::GetFullPath([string]$Service.($pair[0])) -ine [IO.Path]::GetFullPath([string]$State.($pair[1]))) { throw '저장된 봇 연결의 Hermes 경로가 다릅니다.' }
-    }
-    if ([IO.Path]::GetFullPath([string]$Service.python) -ine [IO.Path]::GetFullPath((Join-Path $State.InstallDir 'venv\Scripts\python.exe'))) { throw '저장된 봇 연결의 Python 경로가 다릅니다.' }
-    if ($Service.messaging.reply_in_thread -ne $true -or $Service.messaging.bot_replies_require_mention -ne $true -or
-        @($Service.messaging.bot_observers).Count -ne 1 -or $Service.messaging.bot_observers[0] -cne 'manager') { throw '저장된 봇 응답 정책이 연구팀 정책과 다릅니다.' }
-    $canonicalRoles = @('manager','researcher','analyst','auditor')
-    if (@($Service.bots.PSObject.Properties).Count -ne 4 -or @($Service.bots.PSObject.Properties.Name | Where-Object { $canonicalRoles -cnotcontains $_ }).Count -ne 0) { throw '저장된 봇 연결은 네 역할과 정확히 일치해야 합니다.' }
-    $manifest = Get-HermesResearchPersonaManifest
-    $tokens = @{}; $seenTokens = @(); $seenUsers = @(); $seenNames = @()
-    foreach ($persona in $manifest.Personas) {
-        $profiles = @($State.Profiles | Where-Object { $_.RoleId -ceq $persona.LegacyRoleId })
-        if ($profiles.Count -ne 1) { throw '저장된 봇 역할이 중복되거나 누락됐습니다.' }
-        $profile = $profiles[0]
-        $bot = $Service.bots.([string]$persona.CanonicalName)
-        if (($profile.PSObject.Properties['CanonicalRole'] -and $profile.CanonicalRole -cne $persona.CanonicalName) -or
-            [string]$bot.user_id -cnotmatch '^[a-z0-9]{26}$' -or $bot.user_id -cne $profile.BotUserID -or
-            [string]$bot.token -cnotmatch '^[a-z0-9]{26}$' -or [string]$bot.username -cnotmatch '^[a-z0-9][a-z0-9._-]{1,63}$' -or
-            $seenTokens -ccontains $bot.token -or $seenUsers -ccontains $bot.user_id -or $seenNames -ccontains $bot.username) { throw '저장된 봇의 역할·계정·인증 연결이 일치하지 않습니다.' }
-        $seenTokens += $bot.token; $seenUsers += $bot.user_id; $seenNames += $bot.username
-        $tokens[[string]$profile.ProfileName] = [string]$bot.token
-    }
-    return $tokens
+    $profiles = @($State.Profiles)
+    $expected = @($script:teamDefinition | ForEach-Object { $_.ProfileName })
+    if ($profiles.Count -ne $expected.Count -or @($profiles | Where-Object { $expected -cnotcontains $_.ProfileName }).Count -ne 0) { throw '저장된 연구팀의 프로필 구성이 다릅니다.' }
+    # Saved consent is not consent for a new install: validate the rest with consent set, then clear it on the form.
+    $saved = ($State.WizardOptions | ConvertTo-Json -Depth 6) | ConvertFrom-Json
+    $saved.AllowModelEgress = $true; $saved.AllowPublicWeb = $true
+    $options = Assert-HermesResearchWizardOptions -Options $saved -RuntimeRoot $script:paths.RuntimeRoot
+    return [pscustomobject]@{ Profiles = $profiles; Options = $options; Model = $State.Model }
 }
 
 function Read-ResearchSavedTeam {
@@ -310,37 +236,47 @@ function Read-ResearchSavedTeam {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return }
     if ((Get-Item -LiteralPath $path).Length -gt 262144) { throw '저장된 연구팀 기록의 크기가 올바르지 않습니다.' }
     $savedState = [IO.File]::ReadAllText($path,[Text.Encoding]::UTF8) | ConvertFrom-Json
-    $preferences = Get-ResearchSavedPreferences $savedState
+    if ($savedState.Manager -ceq 'HermesEasySetup.Research.v1') {
+        Add-ResearchLog '이전 4역할 연구팀(분배 서비스)이 설치되어 있습니다. 새 네 역할 팀으로 바꾸려면 아래 「기존 연구팀 전환」에 동의하고 설치하세요. 기록은 보존됩니다.'
+        return
+    }
+    $saved = Get-ResearchSavedTeam $savedState
     $key = $path + '|' + $script:paths.HermesHome + '|' + $script:paths.InstallDir + '|' + $savedState.TeamID
     if ($OnlyIfUnedited -and $script:lastLoadedTeamKey -ceq $key) { return }
-    $options = $null
-    if ($savedState.PSObject.Properties['WizardOptions'] -and $null -ne $savedState.WizardOptions) { $options = Assert-HermesResearchWizardOptions -Options $savedState.WizardOptions -RuntimeRoot $script:paths.RuntimeRoot }
     $tokens = @{}
-    $privatePath = Join-Path $script:paths.RuntimeRoot 'research\private.json'
-    & (Get-Module HermesEasySetup.Admin) { param($value) Assert-HermesAdminPath $value } $privatePath
-    if (Test-Path -LiteralPath $privatePath -PathType Leaf) {
-        if ((Get-Item -LiteralPath $privatePath).Length -gt 262144) { throw '저장된 비공개 연결 파일의 크기가 올바르지 않습니다.' }
-        $service = $null
-        try {
-            $service = [IO.File]::ReadAllText($privatePath,[Text.Encoding]::UTF8) | ConvertFrom-Json
-            $tokens = Get-ResearchSavedConnections -State $savedState -Service $service
-        } finally { $service = $null }
+    $botsPath = Join-Path $script:paths.RuntimeRoot 'research\private\bots.json'
+    & (Get-Module HermesEasySetup.Admin) { param($value) Assert-HermesAdminPath $value } $botsPath
+    if ((Test-Path -LiteralPath $botsPath -PathType Leaf) -and (Get-Item -LiteralPath $botsPath).Length -le 65536) {
+        $bots = [IO.File]::ReadAllText($botsPath,[Text.Encoding]::UTF8) | ConvertFrom-Json
+        foreach ($profile in @($saved.Profiles)) {
+            if ($bots.PSObject.Properties[[string]$profile.ProfileName]) {
+                $token = [string]$bots.([string]$profile.ProfileName)
+                if ($token -cmatch '^[a-z0-9]{26}$') { $tokens[[string]$profile.ProfileName] = $token }
+            }
+        }
     }
-    # Commit to the form only after every public/private binding validates.
+    $gatewayState = Get-HermesResearchGatewayState -RuntimeRoot $script:paths.RuntimeRoot
+    # Commit to the form only after every saved value validates.
     $script:restoringTeam = $true
     try {
-        if ($null -ne $options) { Set-ResearchWizardOptions -Options $options }
+        Set-ResearchWizardOptions -Options $saved.Options
         foreach ($agent in $script:agents) {
-            $saved = @($preferences.Agents | Where-Object ProfileName -CEQ $agent.ProfileName)[0]
-            $agent.Name.Text = [string]$saved.DisplayName; $agent.Role.SelectedValue = [string]$saved.RoleId
+            $profile = @($saved.Profiles | Where-Object ProfileName -CEQ $agent.ProfileName)[0]
+            $agent.Name.Text = [string]$profile.DisplayName
             if ($tokens.ContainsKey([string]$agent.ProfileName)) { $agent.Token.Password = $tokens[[string]$agent.ProfileName] }
         }
-        $script:preferredModel = [string]$preferences.ModelName
-        if ($ui.ModelCombo.Items.Contains($script:preferredModel)) { $ui.ModelCombo.SelectedItem = $script:preferredModel }
+        if ([string]$saved.Model.Mode -ceq 'Codex') {
+            $ui.ModelModeCodex.IsChecked = $true
+            $script:preferredModel = [string]$saved.Model.CodexModel
+            if ($ui.ModelCombo.Items.Contains($script:preferredModel)) { $ui.ModelCombo.SelectedItem = $script:preferredModel }
+        } else {
+            $ui.ModelModeGateway.IsChecked = $true
+            $ui.AnthropicKey.Password = [string]$gatewayState.AnthropicKey; $ui.OpenAIKey.Password = [string]$gatewayState.OpenAIKey
+            $ui.LocalBaseURL.Text = [string]$saved.Model.LocalBaseURL; $ui.LocalModel.Text = [string]$saved.Model.LocalModel
+        }
         $ui.TeamResumeCheck.IsChecked = $true; $script:lastLoadedTeamKey = $key
     } finally { $tokens.Clear(); $script:restoringTeam = $false }
-    if (Test-Path -LiteralPath $privatePath -PathType Leaf) { Add-ResearchLog '저장된 네 봇 연결·이름·역할·모델을 복원했습니다. 토큰은 가려진 입력란에만 넣었으며 설치 시 서버에서 다시 검증합니다.' }
-    else { Add-ResearchLog '이전에 저장한 이름·역할·모델을 불러왔습니다. 이전 형식은 토큰을 입력하거나 같은 봇의 발급 기록을 불러오세요.' }
+    Add-ResearchLog '저장된 네 봇 연결·이름·모델·작업 설정을 불러왔습니다. 토큰과 키는 가려진 입력란에만 넣었으며 설치 시 다시 검증합니다.'
 }
 
 function Get-ResearchServerInput {
@@ -513,6 +449,16 @@ function Complete-ResearchWorker {
                 try { $script:agents[$script:botIndex].Token.Password = [string]$secret.Token } finally { $secret = $null }
                 Add-ResearchLog ('봇 토큰을 해당 행에 채웠습니다: ' + $script:agents[$script:botIndex].ProfileName)
             }
+            if ($script:autoSetup) {
+                if (-not $success -or $script:agents[$script:botIndex].Token.Password -cnotmatch '^[a-z0-9]{26}$') {
+                    $script:autoSetup = $false; Add-ResearchLog '봇 자동 구성에서 멈췄습니다. 발급된 토큰은 보존했습니다. 같은 버튼으로 재시도하세요.'
+                } elseif ($script:botIndex + 1 -lt $script:agents.Count) {
+                    Start-ResearchBotIssuance ($script:botIndex + 1)
+                } else {
+                    $script:autoSetup = $false; $script:autoReady = $true
+                    $ui.TeamApplyButton.RaiseEvent((New-Object Windows.RoutedEventArgs([Windows.Controls.Button]::ClickEvent)))
+                }
+            }
         }
         'Plan' {
             $script:plan = $(if ($success) { $result } else { $null })
@@ -537,22 +483,19 @@ function Complete-ResearchWorker {
         }
         'ResearchTeamSetup' {
             if ($null -ne $result) {
-                $script:preferredModel = [string]$result.ModelName
-                $lines = @($result.Profiles | ForEach-Object {
-                    $text = '{0} ({1}): {2}' -f $_.DisplayName,$_.ProfileName,$_.Status
-                    if ($_.ErrorCode) { $text += ' — ' + [string]$_.ErrorCode }
-                    $text
-                })
+                $lines = @($result.Profiles | ForEach-Object { '{0} ({1}, 봇 @{2}): {3}' -f $_.DisplayName,$_.ProfileName,$_.BotUsername,$_.Status })
+                if ($result.PSObject.Properties['WorkspacePath']) { $lines += ('작업 폴더: ' + [string]$result.WorkspacePath) }
+                if ($result.PSObject.Properties['LocationsPath']) { $lines += ('저장 위치 안내: ' + [string]$result.LocationsPath) }
+                if ($result.PSObject.Properties['Notes']) { foreach ($note in @($result.Notes)) { if ($note) { Add-ResearchLog ([string]$note) } } }
                 $ui.TeamResult.Text = $lines -join [Environment]::NewLine
                 $ui.TeamResumeCheck.IsChecked = $true
             }
             if ($success -and [bool]$result.Succeeded) {
-                $ui.PolicyJson.Text = (Get-HermesResearchPolicy -RuntimeRoot $script:paths.RuntimeRoot | ConvertTo-Json -Depth 15)
                 if (Test-ResearchWorkflowEvidence $result) {
-                    $ui.TeamResult.Text = "사용 준비 완료 — 실제 네 역할 작업·결과·감사 통과 기록 확인`n" + $ui.TeamResult.Text + "`n검증 기록: " + [string]$result.WorkflowTest.EvidencePath
-                    Add-ResearchLog ('실제 자동 분업 테스트를 통과했습니다. 연구 채널에서 관리 봇을 @멘션하여 보고서를 요청하세요. 테스트 요청: ' + [string]$result.WorkflowTest.RequestID)
+                    $ui.TeamResult.Text = "사용 준비 완료 — 네 역할의 실제 작업·결과 전달·기록 확인`n" + $ui.TeamResult.Text + "`n검증 기록: " + [string]$result.WorkflowTest.EvidencePath
+                    Add-ResearchLog ('설치 테스트를 통과했습니다. 연구 채널에서 @' + [string]$result.LeadUsername + ' 을(를) 멘션해 보고서나 논문 작업을 요청하세요. 테스트 폴더: ' + [string]$result.WorkflowTest.RequestID)
                 } else {
-                    $reason = $(if ($result.PSObject.Properties['PendingSettings']) { @($result.PendingSettings) -join ', ' } else { '네 역할의 실제 작업·감사 통과 증거가 확인되지 않음' })
+                    $reason = $(if ($result.PSObject.Properties['PendingSettings']) { @($result.PendingSettings) -join ', ' } else { '네 역할의 실제 작업 증거가 확인되지 않음' })
                     if ($result.PSObject.Properties['WorkflowTest'] -and $null -ne $result.WorkflowTest -and $result.WorkflowTest.PSObject.Properties['ErrorCode']) { $reason += ' ' + [string]$result.WorkflowTest.ErrorCode }
                     $ui.TeamResult.Text = "사용 준비 미완료 — 연결·설정만으로 완료 처리하지 않습니다.`n" + $ui.TeamResult.Text
                     Add-ResearchLog ('실제 분업 테스트를 완료하지 못했습니다. 확인 후 같은 연구팀으로 다시 시도하세요. ' + $reason)
@@ -584,7 +527,18 @@ function Start-ResearchBotIssuance {
         $path = Save-ResearchEncryptedInput $data
         Start-ResearchWorker 'AdminBotSetup' @('-Apply','-AdminInputPath',$path)
         $data = $null
-    } catch { Add-ResearchLog $_.Exception.Message; Remove-ResearchUnusedInput; Refresh-ResearchButtons }
+    } catch { $script:autoSetup = $false; $script:autoReady = $false; Add-ResearchLog $_.Exception.Message; Remove-ResearchUnusedInput; Refresh-ResearchButtons }
+}
+
+function Start-ResearchAutomaticSetup {
+    if ($script:busy -or $script:autoSetup -or $ui.TeamConsent.IsChecked -ne $true) { return }
+    $null = Get-ResearchModelInput
+    $null = Get-ResearchWizardOptions
+    if (-not $ui.TeamAdminPassword.Password) { throw '이 서버의 관리자 비밀번호를 입력하세요. 네 봇·토큰은 자동으로 발급·검증합니다.' }
+    $script:autoSetup = $true
+    $script:autoReady = $false
+    Add-ResearchLog '기본설정 자동 구성: 네 봇·토큰 → 전체 페르소나 → 독립 실행기 → 실제 S1·S2·S3 검증'
+    Start-ResearchBotIssuance 0
 }
 
 function Remove-ResearchUnusedInput {
@@ -594,18 +548,14 @@ function Remove-ResearchUnusedInput {
 }
 
 Add-ResearchAgentRows
-Add-ResearchPolicyRows
 Set-ResearchWizardOptions -Options (New-HermesResearchWizardOptions)
 foreach ($agent in $script:agents) {
     $agent.Name.Add_TextChanged({ if (-not $script:restoringTeam -and -not $script:busy) { $script:teamInputsEdited = $true } })
-    $agent.Role.Add_SelectionChanged({ if (-not $script:restoringTeam -and -not $script:busy) { $script:teamInputsEdited = $true } })
     $agent.Token.Add_PasswordChanged({ if (-not $script:restoringTeam -and -not $script:busy) { $script:teamInputsEdited = $true } })
 }
-foreach ($control in @('WorkspacePath','HumanUsername')) { $ui[$control].Add_TextChanged({ if (-not $script:restoringTeam -and -not $script:busy) { $script:teamInputsEdited = $true } }) }
-foreach ($row in $script:policyRows.Values) {
-    foreach ($box in $row.Limits.Values) { $box.Add_TextChanged({ if (-not $script:restoringTeam -and -not $script:busy) { $script:teamInputsEdited = $true } }) }
-    $row.ReadWorkspace.Add_Click({ if (-not $script:restoringTeam -and -not $script:busy) { $script:teamInputsEdited = $true } })
-}
+foreach ($control in @('WorkspacePath','HumanUsername','TaskTimeoutMinutes','LocalBaseURL','LocalModel','GatewayPort')) { $ui[$control].Add_TextChanged({ if (-not $script:restoringTeam -and -not $script:busy) { $script:teamInputsEdited = $true; Refresh-ResearchButtons } }) }
+foreach ($control in @('AnthropicKey','OpenAIKey')) { $ui[$control].Add_PasswordChanged({ if (-not $script:restoringTeam -and -not $script:busy) { $script:teamInputsEdited = $true } }) }
+foreach ($control in @('ModelModeGateway','ModelModeCodex')) { $ui[$control].Add_Checked({ Refresh-ResearchButtons }) }
 $timer = New-Object Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(300)
 $workerTick = {
@@ -626,26 +576,6 @@ $workerTick = {
 }
 $timer.Add_Tick($workerTick)
 
-$ui.RoleEditorCombo.Add_SelectionChanged({
-    $selected = $ui.RoleEditorCombo.SelectedItem
-    if ($null -ne $selected) { $ui.RoleName.Text = [string]$selected.Name; $ui.RoleInstructions.Text = [string]$selected.Instructions }
-})
-Refresh-ResearchRoles
-$ui.PersonaResetButton.Add_Click({
-    if ($script:busy) { return }
-    $script:roles = @(Get-HermesResearchRoles)
-    Refresh-ResearchRoles
-    Add-ResearchLog '제공된 관리·조사·분석·감사 TXT 전체를 불러왔습니다. 연구팀 생성·재설정으로 적용하세요.'
-})
-$ui.PolicyLoadButton.Add_Click({ try { if (-not $script:busy) { $ui.PolicyJson.Text = (Get-HermesResearchPolicy -RuntimeRoot $script:paths.RuntimeRoot | ConvertTo-Json -Depth 15) } } catch { Add-ResearchLog $_.Exception.Message } })
-$ui.PolicySaveButton.Add_Click({
-    try {
-        if ($script:busy) { return }
-        $ui.PolicyJson.Text = (Get-ResearchWizardOptions | ConvertTo-Json -Depth 15)
-        Add-ResearchLog '현재 설치 선택을 표시했습니다. 연구팀 설치 시 실제 사용자 ID·모델·경로와 연결하여 저장합니다.'
-    } catch { Add-ResearchLog $_.Exception.Message }
-})
-$ui.PolicyDefaultsButton.Add_Click({ if (-not $script:busy) { Set-ResearchWizardOptions -Options (New-HermesResearchWizardOptions) -LimitsOnly } })
 $ui.WorkspaceBrowseButton.Add_Click({
     try {
         if ($script:busy) { return }
@@ -658,28 +588,11 @@ $ui.WorkspaceBrowseButton.Add_Click({
         } finally { $picker.Dispose() }
     } catch { Add-ResearchLog $_.Exception.Message }
 })
-$ui.RoleSaveButton.Add_Click({
-    try {
-        $selected = $ui.RoleEditorCombo.SelectedItem
-        if ($null -eq $selected -or $script:busy) { return }
-        $id = [string]$selected.Id
-        $changed = @($script:roles | ForEach-Object {
-            if ([string]$_.Id -ceq $id) { [pscustomobject]@{ Id = $id; Name = $ui.RoleName.Text.Trim(); Instructions = $ui.RoleInstructions.Text } } else { $_ }
-        })
-        $publicText = ($changed | ConvertTo-Json -Depth 8 -Compress)
-        foreach ($agent in $script:agents) {
-            if ($agent.Token.Password.Length -eq 26 -and $publicText.Contains($agent.Token.Password)) { throw '봇 토큰을 역할 이름·지침에 저장할 수 없습니다.' }
-        }
-        $null = Save-HermesResearchRoles -Roles $changed -RuntimeRoot $script:paths.RuntimeRoot
-        $script:roles = @(Get-HermesResearchRoles -RuntimeRoot $script:paths.RuntimeRoot)
-        Refresh-ResearchRoles -SelectedId $id
-        Add-ResearchLog '역할 템플릿을 저장했습니다. 기존 에이전트에 적용하려면 연구 프로필 재설정으로 실행하세요.'
-    } catch { Add-ResearchLog $_.Exception.Message }
-})
 foreach ($name in @('ServerConsent','HermesConsent','TeamConsent','DockerInstallConsent','ModelEgressConsent','PublicWebConsent')) {
     $ui[$name].Add_Checked({ Refresh-ResearchButtons }); $ui[$name].Add_Unchecked({ Refresh-ResearchButtons })
 }
 $ui.ModelCombo.Add_SelectionChanged({ Refresh-ResearchButtons })
+$ui.ReviewerSlots.Add_SelectionChanged({ if (-not $script:restoringTeam -and -not $script:busy) { $script:teamInputsEdited=$true; Refresh-ResearchButtons } })
 $ui.DockerCheckButton.Add_Click({ try { $script:dockerReady = $false; Start-ResearchWorker 'DockerStatus' } catch { Add-ResearchLog $_.Exception.Message; Refresh-ResearchButtons } })
 $ui.DockerOpenButton.Add_Click({
     try {
@@ -704,6 +617,8 @@ $ui.ServerCreateButton.Add_Click({
         if ($script:busy -or $ui.ServerConsent.IsChecked -ne $true -or -not $script:dockerReady) { return }
         if ($ui.AdminPassword.Password -cne $ui.PasswordConfirm.Password) { throw '비밀번호 확인이 일치하지 않습니다.' }
         $path = Save-ResearchEncryptedInput (Get-ResearchServerInput)
+        # Carry the password in this window only, before clearing step 1. Never log it.
+        $ui.TeamAdminPassword.Password = $ui.AdminPassword.Password
         $extra = @('-Apply','-AdminInputPath',$path)
         if ($ui.ServerResumeCheck.IsChecked -eq $true) { $extra += '-Resume' }
         Start-ResearchWorker 'AdminSetup' $extra
@@ -745,18 +660,26 @@ $ui.HermesInstallButton.Add_Click({
 $ui.HermesStatusButton.Add_Click({ try { Start-ResearchWorker 'CodexStatus' } catch { Add-ResearchLog $_.Exception.Message } })
 $ui.AuthButton.Add_Click({ try { $ui.AuthCode.Clear(); $script:authURL = $null; Start-ResearchWorker 'CodexAuth' @('-Apply') } catch { Add-ResearchLog $_.Exception.Message } })
 $ui.AuthOpenButton.Add_Click({ if ($script:authURL -ceq 'https://auth.openai.com/codex/device') { Start-Process $script:authURL | Out-Null } })
-$ui.HermesNextButton.Add_Click({ if ($script:authenticated -and $null -ne $ui.ModelCombo.SelectedItem) { $ui.WizardTabs.SelectedIndex = 2 } })
+$ui.HermesNextButton.Add_Click({ if ($script:hermesReady) { $ui.WizardTabs.SelectedIndex = 2 } })
 $ui.TeamOpenButton.Add_Click({ if ($script:serverReady) { Start-Process $script:channelURL | Out-Null } })
+$ui.TeamBoardButton.Add_Click({
+    try {
+        $recordPath = Join-Path $script:paths.RuntimeRoot 'research\dashboard.json'
+        if (-not (Test-Path -LiteralPath $recordPath -PathType Leaf) -or (Get-Item -LiteralPath $recordPath).Length -gt 4096) { throw '연구 웹 보드가 아직 시작되지 않았습니다. 기본설정 자동 구성을 먼저 진행하세요.' }
+        $record = [IO.File]::ReadAllText($recordPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
+        if ([string]$record.url -cnotmatch '^http://127\.0\.0\.1:[1-9][0-9]{0,4}/$') { throw '연구 보드 주소를 확인할 수 없습니다.' }
+        Start-Process ([string]$record.url) | Out-Null
+    } catch { Add-ResearchLog $_.Exception.Message }
+})
 $ui.TeamApplyButton.Add_Click({
     try {
-        if ($script:busy -or $ui.TeamConsent.IsChecked -ne $true -or -not $script:authenticated -or -not $script:serverReady) { return }
+        if ($script:busy -or $ui.TeamConsent.IsChecked -ne $true -or -not $script:hermesReady -or -not $script:serverReady) { return }
+        if (-not $script:autoReady) { Start-ResearchAutomaticSetup; return }
+        $script:autoReady = $false
         $data = [pscustomobject]@{
-            SchemaVersion = 1; ServerURL = $ui.TeamServerURL.Text; HomeChannelID = $ui.HomeChannelID.Text
-            ModelName = [string]$ui.ModelCombo.SelectedItem; Roles = $script:roles
-            WizardOptions = (Get-ResearchWizardOptions)
-            Agents = @($script:agents | ForEach-Object { [pscustomobject]@{
-                ProfileName = $_.ProfileName; DisplayName = $_.Name.Text.Trim(); RoleId = [string]$_.Role.SelectedValue; BotToken = $_.Token.Password
-            } })
+            SchemaVersion = 2; ServerURL = $ui.TeamServerURL.Text; HomeChannelID = $ui.HomeChannelID.Text
+            Model = (Get-ResearchModelInput); WizardOptions = (Get-ResearchWizardOptions)
+            Agents = @($script:agents | ForEach-Object { [pscustomobject]@{ ProfileName = $_.ProfileName; DisplayName = $_.Name.Text.Trim(); BotToken = $_.Token.Password } })
         }
         $null = Assert-HermesResearchTeamInput -InputObject $data
         $path = Save-ResearchEncryptedInput $data
@@ -769,24 +692,26 @@ $ui.TeamApplyButton.Add_Click({
 $ui.CloseButton.Add_Click({ $window.Close() })
 $window.Add_Closing({ param($sender,$eventArgs)
     if ($script:busy) { $eventArgs.Cancel = $true; Add-ResearchLog '설치·인증·연결 작업 완료 후 창을 닫으세요.' }
-    else { foreach ($agent in $script:agents) { $agent.Token.Clear() }; $ui.AdminPassword.Clear(); $ui.PasswordConfirm.Clear(); $ui.TeamAdminPassword.Clear(); Remove-ResearchUnusedInput }
+    else { foreach ($agent in $script:agents) { $agent.Token.Clear() }; $ui.AdminPassword.Clear(); $ui.PasswordConfirm.Clear(); $ui.TeamAdminPassword.Clear(); $ui.AnthropicKey.Clear(); $ui.OpenAIKey.Clear(); Remove-ResearchUnusedInput }
 })
 Refresh-ResearchButtons
 $script:teamInputsEdited = $false
 if ($SmokeTest) {
+    if ($ui.TeamQuickActions.Parent.Children.IndexOf($ui.TeamQuickActions) -ne 0 -or $ui.TeamAdvancedSettings.IsExpanded -or
+        -not $ui.TeamQuickActions.Child.Children[0].Children.Contains($ui.TeamApplyButton)) { throw '자동 구성 버튼이 3페이지 최상단에 없거나 세부 설정이 기본으로 펼쳐졌습니다.' }
     if ($script:agents.Count -ne 4 -or $ui.ServerCreateButton.IsEnabled -or $ui.HermesInstallButton.IsEnabled -or $ui.TeamApplyButton.IsEnabled) { throw '연구실 기본 동작이 안전하지 않습니다.' }
     if ($ui.HermesTab.IsEnabled -or $ui.TeamTab.IsEnabled -or $ui.ServerConsent.IsChecked -or $ui.TeamConsent.IsChecked) { throw '준비되지 않은 연구실 단계가 활성화됐습니다.' }
-    if ($script:policyRows.Count -ne 4 -or [string]::IsNullOrWhiteSpace($ui.WorkspacePath.Text) -or -not $ui.PolicyJson.IsReadOnly) { throw 'JSON 없이 설정할 네 역할의 기본 선택이 준비되지 않았습니다.' }
+    if ([string]::IsNullOrWhiteSpace($ui.WorkspacePath.Text) -or [string]$ui.ReviewerSlots.SelectedItem -cne '1' -or $ui.TaskTimeoutMinutes.Text -cne '180' -or $ui.ModelModeCodex.IsChecked -ne $true) { throw '네 역할 연구팀의 기본 선택(작업 폴더·심사자 수·시간 한도·라우터)이 준비되지 않았습니다.' }
     if ($ui.ModelEgressConsent.IsChecked -or $ui.PublicWebConsent.IsChecked -or $ui.MigrationConsent.IsChecked) { throw '모델·웹·기존 연결 전환 동의가 미리 선택됐습니다.' }
     if (Test-ResearchWorkflowEvidence ([pscustomobject]@{ExecutionReady=$true})) { throw '연결 준비만으로 실제 분업 테스트가 통과됐습니다.' }
-    $workflowFixture = [pscustomobject]@{ ExecutionReady = $true; WorkflowTest = [pscustomobject]@{Passed=$true;Live=$true;AuditPassed=$true;RequestID='fixture-request';EvidencePath='fixture-evidence';Roles=@('manager','researcher','analyst','auditor')} }
+    $workflowFixture = [pscustomobject]@{ ExecutionReady = $true; WorkflowTest = [pscustomobject]@{Passed=$true;Live=$true;AuditPassed=$true;Scenarios=@('S1','S2','S3');RequestID='fixture-request';EvidencePath='fixture-evidence';Roles=@('research-lead','research-scout','research-worker','research-reviewer')} }
     if (-not (Test-ResearchWorkflowEvidence $workflowFixture)) { throw '네 역할의 실제 테스트 증거가 준비 상태로 연결되지 않습니다.' }
     $workflowFixture.WorkflowTest.Live = $false
     if (Test-ResearchWorkflowEvidence $workflowFixture) { throw '모의 테스트를 실제 분업 검증으로 표시했습니다.' }
-    $workflowFixture.WorkflowTest.Live = $true; $workflowFixture.WorkflowTest.Roles = @('manager','researcher','analyst')
-    if (Test-ResearchWorkflowEvidence $workflowFixture) { throw '감사 역할이 누락된 테스트를 완료로 표시했습니다.' }
-    if (@($script:agents | Where-Object { $_.Token.Password }).Count -ne 0 -or $ui.AdminPassword.Password -or $ui.PasswordConfirm.Password) { throw '초기 입력에 비밀값이 있습니다.' }
-    foreach ($agent in $script:agents) { if ($agent.Role.Items.Count -ne 4 -or $null -eq $agent.Role.SelectedItem) { throw '연구 역할 네 개가 표시되지 않습니다.' } }
+    $workflowFixture.WorkflowTest.Live = $true; $workflowFixture.WorkflowTest.Roles = @('research-lead','research-scout','research-worker','research-worker')
+    if (Test-ResearchWorkflowEvidence $workflowFixture) { throw '감사·심사 역할이 누락된 테스트를 완료로 표시했습니다.' }
+    if (@($script:agents | Where-Object { $_.Token.Password }).Count -ne 0 -or $ui.AdminPassword.Password -or $ui.PasswordConfirm.Password -or $ui.AnthropicKey.Password -or $ui.OpenAIKey.Password) { throw '초기 입력에 비밀값이 있습니다.' }
+    if ((@($script:agents | ForEach-Object { $_.ProfileName }) -join ',') -cne 'research-lead,research-scout,research-worker,research-reviewer') { throw '연구 프로필 네 개가 표시되지 않습니다.' }
     if ($ui.DockerInstallConsent.IsChecked -or $ui.DockerInstallButton.IsEnabled -or $ui.DockerOpenButton.IsEnabled) { throw '확인 전 Docker 설치·실행이 활성화됐습니다.' }
     $dockerFixture = [pscustomobject]@{
         Installed = $false; Ready = $false; CanInstall = $true; CanOpen = $false; RebootRequired = $false
@@ -823,84 +748,74 @@ if ($SmokeTest) {
     $ui.DockerStatus.Text = '설치 위치·공식 서명·Linux 엔진과 PC 준비 상태를 확인합니다.'
     $ui.DockerAlternatives.Text = 'WSL2 Ubuntu 직접 설치 또는 별도 Linux·기존 Mattermost 서버 연결이 대안입니다. 이 초기 버전에서는 대안 안내만 제공합니다.'
     $script:serverURL = 'http://127.0.0.1:18065'; $ui.HomeChannelID.Text = 'c' * 26
-    $saved = [pscustomobject]@{
-        SchemaVersion = 1; Manager = 'HermesEasySetup.Research.v1'; OwnerSID = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-        TeamID = 'a' * 32; ServerURL = $script:serverURL; HomeChannelID = $ui.HomeChannelID.Text
-        HermesHome = $script:paths.HermesHome; InstallDir = $script:paths.InstallDir; RuntimeRoot = $script:paths.RuntimeRoot
-        ModelName = 'mock-model'; Profiles = @(New-HermesResearchDefaultAgents)
-    }
-    $saved.Profiles[0].DisplayName = '수정된 총괄'; $saved.Profiles[0].RoleId = 'reviewer'; $saved.Profiles[3].RoleId = 'planner'
-    $preferences = Get-ResearchSavedPreferences $saved
-    if ($preferences.Agents[0].DisplayName -cne '수정된 총괄' -or $preferences.Agents[0].RoleId -cne 'reviewer') { throw '기존 이름·교환한 역할이 복원되지 않습니다.' }
     $resumeFixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ('hermes-gui-resume-' + [guid]::NewGuid().ToString('N'))
     $priorPaths = $script:paths
     $priorKey = $script:lastLoadedTeamKey
     $priorEdited = $script:teamInputsEdited
-    $formBefore = @($script:agents | ForEach-Object { @{Name=$_.Name.Text;Role=[string]$_.Role.SelectedValue;Token=$_.Token.Password} })
+    $formBefore = @($script:agents | ForEach-Object { @{Name=$_.Name.Text;Token=$_.Token.Password} })
     try {
         $script:paths = [pscustomobject]@{ RuntimeRoot=(Join-Path $resumeFixtureRoot 'runtime');HermesHome=(Join-Path $resumeFixtureRoot 'home');InstallDir=(Join-Path $resumeFixtureRoot 'home\hermes-agent') }
-        $fixtureState = ($saved | ConvertTo-Json -Depth 8) | ConvertFrom-Json
-        foreach ($key in @('RuntimeRoot','HermesHome','InstallDir')) { $fixtureState.$key = $script:paths.$key }
-        $fixtureState | Add-Member NoteProperty ExecutionMode 'GovernedBroker'
-        $fixtureBots = [ordered]@{}
-        $fixtureIndex = 0
-        foreach ($persona in (Get-HermesResearchPersonaManifest).Personas) {
-            $fixtureIndex++
-            $profile = @($fixtureState.Profiles | Where-Object { $_.RoleId -ceq $persona.LegacyRoleId })[0]
-            $userID = 'u' + (([string][char](96 + $fixtureIndex)) * 25)
-            $profile | Add-Member NoteProperty BotUserID $userID
-            $profile | Add-Member NoteProperty CanonicalRole ([string]$persona.CanonicalName)
-            $fixtureBots[$persona.CanonicalName] = @{token=(([string][char](96 + $fixtureIndex)) * 26);user_id=$userID;username=('fixture_'+$persona.CanonicalName);display_name=$profile.DisplayName}
+        $options = New-HermesResearchWizardOptions -WorkspacePath 'C:\Research Fixture' -HumanUsername 'fixture-user'
+        $options.ReviewerSlots = 2; $options.TaskTimeoutMinutes = 240
+        $profiles = @(New-HermesResearchDefaultAgents | ForEach-Object { [pscustomobject]@{ ProfileName = $_.ProfileName; DisplayName = ('저장된 ' + $_.DisplayName); BotUserID = ('u' * 26); BotUsername = $_.ProfileName; OwnsProfile = $true; Status = 'Configured' } })
+        $fixtureState = [pscustomobject]@{
+            SchemaVersion = 2; Manager = 'HermesEasySetup.ResearchTeam.v2'; OwnerSID = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; TeamID = 'a' * 32
+            ServerURL = $script:serverURL; HomeChannelID = $ui.HomeChannelID.Text; RuntimeRoot = $script:paths.RuntimeRoot; HermesHome = $script:paths.HermesHome; InstallDir = $script:paths.InstallDir
+            Model = [pscustomobject]@{ Mode = 'Gateway'; Cloud = @('anthropic'); LocalBaseURL = 'http://127.0.0.1:8000/v1'; LocalModel = 'fixture-local' }; WizardOptions = $options; Profiles = $profiles
         }
-        $fixtureService = (@{schema_version=1;hermes_home=$script:paths.HermesHome;install_dir=$script:paths.InstallDir;python=(Join-Path $script:paths.InstallDir 'venv\Scripts\python.exe');server_url=$script:serverURL;channel_id=$ui.HomeChannelID.Text;bots=$fixtureBots;messaging=@{reply_in_thread=$true;bot_replies_require_mention=$true;bot_observers=@('manager')}} | ConvertTo-Json -Depth 8) | ConvertFrom-Json
-        $restored = Get-ResearchSavedConnections -State $fixtureState -Service $fixtureService
-        if ($restored.Count -ne 4 -or $restored['research-reviewer'] -cne ('a' * 26)) { throw '교환된 관리 역할의 계정 토큰이 실제 프로필에 매핑되지 않습니다.' }
-        $fixtureService.bots.manager.user_id = 'z' * 26
-        $rejected = $false; try { $null = Get-ResearchSavedConnections -State $fixtureState -Service $fixtureService } catch { $rejected = $true }
-        if (-not $rejected) { throw '다른 봇 계정의 비공개 연결을 복원했습니다.' }
-        $fixtureService.bots.manager.user_id = 'u' + ('a' * 25)
         $researchRoot = Join-Path $script:paths.RuntimeRoot 'research'
-        New-Item -ItemType Directory -Path $researchRoot -Force | Out-Null
-        [IO.File]::WriteAllText((Join-Path $researchRoot 'team.json'),($fixtureState | ConvertTo-Json -Depth 10),(New-Object Text.UTF8Encoding($false)))
-        [IO.File]::WriteAllText((Join-Path $researchRoot 'private.json'),($fixtureService | ConvertTo-Json -Depth 10),(New-Object Text.UTF8Encoding($false)))
+        New-Item -ItemType Directory -Path (Join-Path $researchRoot 'private') -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $researchRoot 'gateway') -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $researchRoot 'team.json'),($fixtureState | ConvertTo-Json -Depth 8),(New-Object Text.UTF8Encoding($false)))
+        $bots = [ordered]@{}; $index = 0
+        foreach ($profile in $profiles) { $index++; $bots[$profile.ProfileName] = ([string][char](96 + $index)) * 26 }
+        [IO.File]::WriteAllText((Join-Path $researchRoot 'private\bots.json'),($bots | ConvertTo-Json),(New-Object Text.UTF8Encoding($false)))
+        [IO.File]::WriteAllText((Join-Path $researchRoot 'gateway\env'),("ANTHROPIC_API_KEY=sk-ant-fixture-key-0123456789`n"),(New-Object Text.UTF8Encoding($false)))
         $script:teamInputsEdited = $false; $script:lastLoadedTeamKey = $null
         Read-ResearchSavedTeam -OnlyIfUnedited
-        if (@($script:agents | Where-Object { $_.Token.Password.Length -ne 26 }).Count -ne 0 -or $ui.Log.Text.Contains('a' * 26)) { throw '복원된 비공개 토큰이 비어 있거나 안내에 노출됐습니다.' }
+        if (@($script:agents | Where-Object { $_.Token.Password.Length -ne 26 }).Count -ne 0 -or $ui.Log.Text.Contains('a' * 26) -or $ui.Log.Text.Contains('sk-ant-fixture')) { throw '복원된 비공개 토큰·키가 비어 있거나 안내에 노출됐습니다.' }
+        if ($script:agents[0].Name.Text -cne '저장된 총괄' -or [string]$ui.ReviewerSlots.SelectedItem -cne '2' -or $ui.TaskTimeoutMinutes.Text -cne '240' -or
+            $ui.AnthropicKey.Password -cne 'sk-ant-fixture-key-0123456789' -or $ui.LocalModel.Text -cne 'fixture-local' -or $ui.ModelEgressConsent.IsChecked) { throw '저장된 네 역할 설정·모델이 복원되지 않았거나 동의가 미리 선택됐습니다.' }
         $script:agents[0].Name.Text = '사용자가 입력 중인 값'
         if (-not $script:teamInputsEdited) { throw '연구팀 입력 편집이 추적되지 않습니다.' }
         Read-ResearchSavedTeam -OnlyIfUnedited
         if ($script:agents[0].Name.Text -cne '사용자가 입력 중인 값') { throw '상태 새로고침이 입력 중인 이름을 덮어썼습니다.' }
-        $fixtureService.channel_id = 'x' * 26
-        [IO.File]::WriteAllText((Join-Path $researchRoot 'private.json'),($fixtureService | ConvertTo-Json -Depth 10),(New-Object Text.UTF8Encoding($false)))
+        $fixtureState.OwnerSID = 'S-1-5-18'
+        [IO.File]::WriteAllText((Join-Path $researchRoot 'team.json'),($fixtureState | ConvertTo-Json -Depth 8),(New-Object Text.UTF8Encoding($false)))
         $rejected = $false; try { Read-ResearchSavedTeam } catch { $rejected = $true }
-        if (-not $rejected -or $script:agents[0].Name.Text -cne '사용자가 입력 중인 값') { throw '다른 채널의 연결이 입력란을 변경했습니다.' }
+        if (-not $rejected) { throw '다른 사용자의 연구팀 기록을 불러왔습니다.' }
     } finally {
         $script:paths = $priorPaths; $script:lastLoadedTeamKey = $priorKey
         $script:restoringTeam = $true
-        for ($index = 0; $index -lt 4; $index++) { $script:agents[$index].Name.Text=$formBefore[$index].Name; $script:agents[$index].Role.SelectedValue=$formBefore[$index].Role; $script:agents[$index].Token.Password=$formBefore[$index].Token }
+        for ($index = 0; $index -lt $script:agents.Count; $index++) { $script:agents[$index].Name.Text=$formBefore[$index].Name; $script:agents[$index].Token.Password=$formBefore[$index].Token }
+        $ui.AnthropicKey.Clear(); $ui.LocalBaseURL.Clear(); $ui.LocalModel.Clear(); Set-ResearchWizardOptions -Options (New-HermesResearchWizardOptions)
         $script:restoringTeam = $false; $script:teamInputsEdited = $priorEdited
         $resolvedFixture = [IO.Path]::GetFullPath($resumeFixtureRoot)
         $fixturePrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\hermes-gui-resume-'
         if ($resolvedFixture.StartsWith($fixturePrefix,[StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $resolvedFixture)) { Remove-Item -LiteralPath $resolvedFixture -Recurse -Force }
     }
-    $saved.OwnerSID = 'S-1-5-18'; $rejected = $false
-    try { $null = Get-ResearchSavedPreferences $saved } catch { $rejected = $true }
-    if (-not $rejected) { throw '다른 사용자의 연구팀 배정을 불러왔습니다.' }
-    $script:serverReady = $true; $script:hermesReady = $true; $script:authenticated = $true
-    [void]$ui.ModelCombo.Items.Add('mock-model'); $ui.ModelCombo.SelectedIndex = 0
+    # Router mode needs no Codex login; Codex mode does.
+    $script:serverReady = $true; $script:hermesReady = $true; $script:authenticated = $false
     Refresh-ResearchButtons
-    if ($ui.TeamApplyButton.IsEnabled -or -not $ui.TeamTab.IsEnabled) { throw '모델 인증이 생성 동의를 우회했습니다.' }
+    if (-not $ui.TeamTab.IsEnabled -or $ui.TeamApplyButton.IsEnabled) { throw 'Hermes 설치 후 연구팀 단계가 열리지 않거나 동의 없이 설치가 활성화됐습니다.' }
     $ui.TeamConsent.IsChecked = $true; Refresh-ResearchButtons
-    if ($ui.TeamApplyButton.IsEnabled) { throw '모델·웹 전송 선택 없이 자동 분업 설치가 활성화됐습니다.' }
+    if ($ui.TeamApplyButton.IsEnabled) { throw '모델·웹 전송 선택 없이 연구팀 설치가 활성화됐습니다.' }
     $ui.ModelEgressConsent.IsChecked = $true; $ui.PublicWebConsent.IsChecked = $true; Refresh-ResearchButtons
-    if (-not $ui.TeamApplyButton.IsEnabled) { throw '연구팀 생성 조건이 충족돼도 버튼이 활성화되지 않습니다.' }
+    if (-not $ui.TeamApplyButton.IsEnabled) { throw '라우터 연결에서 설치 조건이 충족돼도 버튼이 활성화되지 않습니다.' }
+    $rejected = $false; try { $null = Get-ResearchModelInput } catch { $rejected = $true }
+    if (-not $rejected) { throw 'API 키·로컬 모델 없이 라우터 입력이 통과했습니다.' }
+    $ui.ModelModeCodex.IsChecked = $true; Refresh-ResearchButtons
+    if ($ui.TeamApplyButton.IsEnabled -or $ui.AnthropicKey.IsEnabled) { throw 'Codex 로그인 없이 Codex 직접 연결 설치가 활성화됐거나 라우터 입력이 열려 있습니다.' }
+    $script:authenticated = $true; [void]$ui.ModelCombo.Items.Add('mock-model'); $ui.ModelCombo.SelectedIndex = 0; Refresh-ResearchButtons
+    if (-not $ui.TeamApplyButton.IsEnabled -or (Get-ResearchModelInput).CodexModel -cne 'mock-model') { throw 'Codex 직접 연결 선택이 설치 입력으로 전달되지 않습니다.' }
+    $ui.ModelModeGateway.IsChecked = $true
     $formOptions = Get-ResearchWizardOptions
-    if ($formOptions.Roles.researcher.Limits.revisions -ne 2 -or $formOptions.WorkspacePath -cne $ui.WorkspacePath.Text) { throw '화면 선택이 설치 정책 입력으로 전달되지 않습니다.' }
+    if ($formOptions.ReviewerSlots -ne 1 -or $formOptions.TaskTimeoutMinutes -ne 180 -or $formOptions.WorkspacePath -cne $ui.WorkspacePath.Text.TrimEnd('\','/')) { throw '화면 선택이 설치 입력으로 전달되지 않습니다.' }
     $script:busy = $true; Refresh-ResearchButtons
-    if ($ui.TeamApplyButton.IsEnabled -or $ui.CloseButton.IsEnabled -or @($script:agents | Where-Object { $_.Token.IsEnabled }).Count -ne 0) { throw '작업 중 입력과 닫기가 차단되지 않습니다.' }
+    if ($ui.TeamApplyButton.IsEnabled -or $ui.CloseButton.IsEnabled -or @($script:agents | Where-Object { $_.Token.IsEnabled }).Count -ne 0 -or $ui.AnthropicKey.IsEnabled) { throw '작업 중 입력과 닫기가 차단되지 않습니다.' }
     $script:busy = $false; Refresh-ResearchButtons
     $ui.UseExistingHermesCheck.IsChecked = $true
-    if ($ui.TeamConsent.Content -isnot [Windows.Controls.TextBlock] -or -not $ui.TeamConsent.Content.Text.Contains('실제 모델')) { throw '기존 Hermes 선택이 실제 분업 테스트 동의 문구를 제거했습니다.' }
+    if ($ui.TeamConsent.Content -isnot [Windows.Controls.TextBlock] -or -not $ui.TeamConsent.Content.Text.Contains('실제 모델')) { throw '기존 Hermes 선택이 실제 작업 테스트 동의 문구를 제거했습니다.' }
     $script:plan = [pscustomobject]@{ Fingerprint = 'fixture' }
     $ui.HermesConsent.IsChecked = $true
     Set-ResearchAuthStatus ([pscustomobject]@{ LoggedIn = $true; Models = @('original-model','other-model'); PreferredModel = 'original-model'; Summary = 'fixture existing credentials'; RuntimeKind = 'Existing'; Version = 'fixture version' })
@@ -909,7 +824,7 @@ if ($SmokeTest) {
     $originalHomeText = $ui.ExistingHermesHome.Text
     $script:preferredModel = 'other-model'
     $ui.ExistingHermesHome.Text = $originalHomeText + '-changed'
-    if ($script:authenticated -or $ui.HermesNextButton.IsEnabled -or $ui.TeamApplyButton.IsEnabled -or $null -ne $script:preferredModel) { throw '경로 변경이 이전 인증·모델 선택을 재사용했습니다.' }
+    if ($script:authenticated -or $script:hermesReady -or $ui.HermesNextButton.IsEnabled -or $ui.TeamApplyButton.IsEnabled -or $null -ne $script:preferredModel) { throw '경로 변경이 이전 인증·모델 선택을 재사용했습니다.' }
     $ui.ExistingHermesHome.Text = $originalHomeText
     $ui.UseExistingHermesCheck.IsChecked = $false
     Refresh-ResearchButtons
@@ -921,6 +836,65 @@ if ($SmokeTest) {
     $script:workerEOF = $false; $script:busy = $true; $script:workerAction = 'mock-fault'; $script:workerResult = $null
     & $workerTick
     if ($script:busy -or $null -ne $script:worker -or -not $ui.CloseButton.IsEnabled) { throw '작업 읽기 실패 후 종료 잠금이 풀리지 않습니다.' }
+    # Exercise the real completion chain without a server, profile, credential file or model.
+    $originalIssue = ${function:Start-ResearchBotIssuance}
+    $originalSave = ${function:Save-ResearchEncryptedInput}
+    $originalStart = ${function:Start-ResearchWorker}
+    $originalCredential = ${function:Read-HermesAdminBotCredential}
+    try {
+        $script:issuedFixture = @(); $script:startedFixture = @(); $script:busy = $false
+        function Start-ResearchBotIssuance { param([int]$Index) $script:botIndex = $Index; $script:issuedFixture += $Index }
+        function Save-ResearchEncryptedInput { param($Value) return 'offline-fixture-only' }
+        function Start-ResearchWorker { param($Action,$ExtraArguments) $script:startedFixture += $Action }
+        function Read-HermesAdminBotCredential { param($Value) return [pscustomobject]@{ Token=(('a' * 25) + [string]$script:botIndex) } }
+        $ui.ServerId.Text='research-fixture'; $ui.ServerPort.Text='18065'
+        $ui.AdminUsername.Text='fixture-admin'; $ui.AdminEmail.Text='fixture@example.invalid'
+        $script:dockerReady=$true; $ui.ServerConsent.IsChecked=$true
+        $ui.AdminPassword.Password='Offline-Fixture-Pass-0172!'; $ui.PasswordConfirm.Password='Offline-Fixture-Pass-0172!'
+        $ui.ServerCreateButton.RaiseEvent((New-Object Windows.RoutedEventArgs([Windows.Controls.Button]::ClickEvent)))
+        if ($ui.TeamAdminPassword.Password -cne 'Offline-Fixture-Pass-0172!' -or $ui.AdminPassword.Password -or $ui.PasswordConfirm.Password -or $ui.Log.Text.Contains('Offline-Fixture-Pass-0172!')) {
+            throw '1단계 비밀번호가 3단계에 이어지지 않거나 로그에 노출됐습니다.'
+        }
+        $script:startedFixture=@(); $ui.ServerConsent.IsChecked=$false
+        $ui.ModelModeCodex.IsChecked = $true
+        Set-ResearchAuthStatus ([pscustomobject]@{LoggedIn=$true;Models=@('mock-model');PreferredModel='mock-model';Summary='fixture'})
+        $ui.TeamConsent.IsChecked=$true; $ui.ModelEgressConsent.IsChecked=$true; $ui.PublicWebConsent.IsChecked=$true
+        $ui.TeamAdminPassword.Password='offline-fixture-only'
+        $ui.TeamServerURL.Text='http://127.0.0.1:18065'; $ui.HomeChannelID.Text=('c' * 26)
+        $script:serverReady=$true; $script:hermesReady=$true; Refresh-ResearchButtons
+        if (-not $ui.TeamApplyButton.IsEnabled) { throw '준비된 기본설정 버튼이 비활성 상태입니다.' }
+        $ui.TeamApplyButton.RaiseEvent((New-Object Windows.RoutedEventArgs([Windows.Controls.Button]::ClickEvent)))
+        for ($fixtureIndex = 0; $fixtureIndex -lt 4; $fixtureIndex++) {
+            if ($script:botIndex -ne $fixtureIndex) { throw 'Automatic bot issuance skipped a role' }
+            $script:worker = [pscustomobject]@{ ExitCode=0 }
+            $script:worker | Add-Member ScriptMethod WaitForExit {}
+            $script:worker | Add-Member ScriptMethod Dispose {}
+            $script:workerAction='AdminBotSetup'; $script:workerResult=[pscustomobject]@{Ready=$true}
+            $script:workerFailed=$false; $script:inputPath=$null
+            Complete-ResearchWorker
+        }
+        if (($script:issuedFixture -join ',') -cne '0,1,2,3' -or ($script:startedFixture -join ',') -cne 'ResearchTeamSetup') {
+            throw 'One click did not chain four bot connections into exactly one team setup'
+        }
+        $script:issuedFixture=@(); $script:startedFixture=@(); $script:autoSetup=$true; $script:botIndex=1
+        $script:worker=[pscustomobject]@{ExitCode=1}
+        $script:worker | Add-Member ScriptMethod WaitForExit {}
+        $script:worker | Add-Member ScriptMethod Dispose {}
+        $script:workerAction='AdminBotSetup'; $script:workerResult=$null; $script:workerFailed=$true
+        Complete-ResearchWorker
+        if ($script:autoSetup -or $script:issuedFixture.Count -or $script:startedFixture.Count -or -not $script:agents[0].Token.Password) {
+            throw 'Failed bot issuance continued or discarded existing tokens'
+        }
+    } finally {
+        Set-Item Function:Start-ResearchBotIssuance $originalIssue
+        Set-Item Function:Save-ResearchEncryptedInput $originalSave
+        Set-Item Function:Start-ResearchWorker $originalStart
+        if ($originalCredential) { Set-Item Function:Read-HermesAdminBotCredential $originalCredential }
+        else { Remove-Item Function:Read-HermesAdminBotCredential -ErrorAction SilentlyContinue }
+        foreach ($agent in $script:agents) { $agent.Token.Clear() }
+        $ui.TeamAdminPassword.Clear(); $script:autoSetup=$false; $script:autoReady=$false
+        $script:workerFailed=$false
+    }
     $ui.Log.Clear()
     if ($PreviewPath) {
         if ($PreviewStep -ceq 'Hermes') {
@@ -937,7 +911,7 @@ if ($SmokeTest) {
         $stream = [IO.File]::Open([IO.Path]::GetFullPath($PreviewPath),[IO.FileMode]::CreateNew)
         try { $encoder.Save($stream) } finally { $stream.Dispose() }
     }
-    Write-Host 'PASS local research WPF: Docker/model/web consent, JSON-free policy, live evidence gate, private-token resume bindings and edit preservation, failed-worker cleanup'
+    Write-Host 'PASS local research WPF: 3+1 team, router/Codex model choice, Docker/model/web consent, live S1-S2-S3 evidence gate, private token/key restore and edit preservation, failed-worker cleanup'
     $window.Close(); exit 0
 }
 $window.Add_ContentRendered({

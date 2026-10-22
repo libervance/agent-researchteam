@@ -3,7 +3,7 @@
 function Resolve-HermesResearchHuman {
     param($InputObject)
     $options = $InputObject.WizardOptions
-    $manager = @($InputObject.Agents | Where-Object { $_.RoleId -ceq 'planner' })[0]
+    $manager = @($InputObject.Agents | Where-Object { $_.ProfileName -ceq 'research-lead' })[0]
     $user = Invoke-HermesResearchMattermostAPI -ServerURL $InputObject.ServerURL -Path ('/api/v4/users/username/' + $options.HumanUsername) -Token $manager.BotToken
     if ($user.id -cnotmatch '^[a-z0-9]{26}$' -or $user.delete_at -ne 0 -or ($user.PSObject.Properties['is_bot'] -and $user.is_bot -eq $true)) { throw '활성 사람 계정을 선택하세요.' }
     $member = Invoke-HermesResearchMattermostAPI -ServerURL $InputObject.ServerURL -Path ('/api/v4/channels/' + $InputObject.HomeChannelID + '/members/' + $user.id) -Token $manager.BotToken
@@ -15,7 +15,7 @@ function Get-HermesResearchMigrationTasks {
     param($Prior, $Paths, $BrokerPlan)
     $plans = @($BrokerPlan)
     foreach ($profile in @($Prior.Profiles)) {
-        $plan = Get-HermesResearchTaskPlan -ProfileName $profile.ProfileName -HermesHome $Paths.HermesHome -RuntimeRoot $Paths.RuntimeRoot -OwnerSID $Prior.OwnerSID -TeamID $Prior.TeamID -PowerShellPath (Get-HermesPowerShellExecutable)
+        $plan = Get-HermesResearchTaskPlan -ProfileName $profile.ProfileName -HermesHome $Paths.HermesHome -RuntimeRoot $Paths.RuntimeRoot -OwnerSID $Prior.OwnerSID -TeamID $Prior.TeamID -PowerShellPath (Get-HermesPowerShellExecutable) -Manager $script:ResearchLegacyManager
         if ($null -ne $profile.GatewayTask -and $profile.GatewayTask -cnotin @($plan.TaskName, $BrokerPlan.TaskName, '')) { throw 'ResearchMigrationTaskBindingRejected' }
         $plans += $plan
     }
@@ -218,34 +218,34 @@ function Stop-HermesResearchMigrationTasks {
     throw 'ResearchMigrationTaskStopTimeout'
 }
 
-function Confirm-HermesResearchNativeDetached {
-    param($Paths, [string]$Python, [hashtable]$Environment, [string[]]$ProfileNames)
-    $helper = Join-Path $Paths.RuntimeRoot 'research\engine\research_team\native_cutover.py'
-    $result = Invoke-HermesProcess -FilePath $Python -ArgumentList @('-I','-S','-B',$helper,'--source',$Paths.InstallDir,'--home',$Paths.HermesHome,'--profiles',($ProfileNames -join ',')) -Environment $Environment -TimeoutSeconds 60
-    if (-not $result.Started -or $result.TimedOut -or $result.ExitCode -ne 0) { throw '기존 연구 봇의 응답 경로 중지를 확인하지 못했습니다. 새 분배 엔진은 시작하지 않았습니다. 개인 Gateway는 중지하지 않았습니다.' }
-    try { $status = $result.StdOut.Trim() | ConvertFrom-Json; if ($status.detached -ne $true) { throw 'NotDetached' } } catch { throw 'ResearchNativeDetachNotVerified' }
-}
-
-function Invoke-HermesResearchLiveTest {
-    param([string]$ResearchRoot, [string]$Python, [hashtable]$Environment, [string]$UserID)
+function Invoke-HermesResearchSelfTest {
+    <# The live end-to-end test (team_selftest.py): every role does one small real task through
+       the running service, the lead answers through its own profile, delivery and ledger verified. #>
+    param([string]$ResearchRoot, [string]$Python, [hashtable]$Environment, [string]$WorkspacePath, [string]$ChannelID,
+          [string]$CommandPath, [string]$Mention, [int]$TimeoutSeconds = 10800)
     $evidence = Join-Path $ResearchRoot 'live-test.json'
-    $test = [ordered]@{ Passed = $false; Live = $false; RequestID = ''; Roles = @(); AuditPassed = $false; EvidencePath = $evidence; ErrorCode = 'LiveTestNotPassed' }
-    $started = ([DateTime]::UtcNow - [DateTime]'1970-01-01').TotalSeconds
-    $result = Invoke-HermesProcess -FilePath $Python -ArgumentList @('-I','-S','-B',(Join-Path $ResearchRoot 'engine\research_team\broker.py'),'self-test','--root',$ResearchRoot,'--user-id',$UserID) -Environment $Environment -TimeoutSeconds 1800
-    if (-not $result.Started -or $result.TimedOut -or $result.ExitCode -ne 0) { $test.ErrorCode = $(if ($result.TimedOut) { 'LiveTestTimeout' } else { 'LiveTestFailed' }); return [pscustomobject]$test }
+    $test = [ordered]@{ Passed = $false; Live = $false; RequestID = ''; Roles = @(); AuditPassed = $false; Scenarios = @(); EvidencePath = $evidence; ErrorCode = 'LiveTestNotPassed'; Detail = '' }
+    $script = Join-Path $ResearchRoot 'team\shared\team_selftest.py'
+    $result = Invoke-HermesProcess -FilePath $Python -ArgumentList @('-B', $script, '--workspace', $WorkspacePath, '--channel', $ChannelID, '--hermes', $CommandPath, '--mention', $Mention, '--timeout', [string]$TimeoutSeconds) -WorkingDirectory $WorkspacePath -Environment $Environment -TimeoutSeconds ($TimeoutSeconds + 1200)
+    if (-not $result.Started -or $result.TimedOut) { $test.ErrorCode = 'LiveTestTimeout'; return [pscustomobject]$test }
     try {
-        $answer = $result.StdOut.Trim() | ConvertFrom-Json
-        if ($answer.ready -eq $true -and $answer.live -eq $true -and $answer.audits_verified -eq $true -and $answer.search_verified -eq $true -and $answer.read_verified -eq $true -and $answer.messages_verified -eq $true -and
-            $answer.request_id -cmatch '^req_[a-f0-9]{32}$' -and @($answer.roles_verified).Count -eq 4 -and (@($answer.roles_verified | Sort-Object) -join ',') -ceq 'analyst,auditor,manager,researcher' -and (Test-Path -LiteralPath $evidence -PathType Leaf)) {
-            if (-not (Test-HermesSafeTargetPath -LiteralPath $evidence).Safe -or (Get-Item -LiteralPath $evidence).Length -gt 262144) { throw 'EvidencePathRejected' }
-            $saved = [IO.File]::ReadAllText($evidence) | ConvertFrom-Json
-            if ($saved.request_id -cne $answer.request_id -or [double]$saved.tested_at -lt $started -or $saved.ready -ne $true -or $saved.live -ne $true) { throw 'StaleEvidenceRejected' }
-            $check = Invoke-HermesProcess -FilePath $Python -ArgumentList @('-I','-S','-B',(Join-Path $ResearchRoot 'engine\research_team\broker.py'),'check','--root',$ResearchRoot) -Environment $Environment -TimeoutSeconds 30
-            if (-not $check.Started -or $check.TimedOut -or $check.ExitCode -ne 0) { throw 'EvidenceCheckFailed' }
-            $verified = $check.StdOut.Trim() | ConvertFrom-Json
-            if ($verified.ready -ne $true -or $verified.live_test_verified -ne $true) { throw 'EvidenceBindingsRejected' }
-            $test.Passed = $true; $test.Live = $true; $test.RequestID = $answer.request_id; $test.Roles = @($answer.roles_verified); $test.AuditPassed = $true; $test.ErrorCode = ''
+        $answer = $result.StdOut.Trim().Split("`n")[-1] | ConvertFrom-Json
+        Write-HermesResearchAtomicText -LiteralPath $evidence -Text (($answer | ConvertTo-Json -Depth 6) + "`n")
+        $done = @($answer.roles.PSObject.Properties | Where-Object { [string]$_.Value -ceq 'done' } | ForEach-Object { $_.Name })
+        if ([string]$answer.lead -ceq 'done') { $done += 'research-lead' }
+        $test.Live = ($answer.live -eq $true)
+        $test.RequestID = [IO.Path]::GetFileName([string]$answer.folder)
+        $test.Roles = @($done | Sort-Object)
+        $test.AuditPassed = ($answer.PSObject.Properties['audit_passed'] -and $answer.audit_passed -eq $true)
+        if ($answer.PSObject.Properties['scenarios']) {
+            $test.Scenarios = @($answer.scenarios.PSObject.Properties | Where-Object {
+                $_.Value.ready_for_delivery -eq $true -and $_.Value.delivered -eq $true
+            } | ForEach-Object Name | Sort-Object)
         }
+        $test.Detail = [string]$answer.error
+        if ($result.ExitCode -eq 0 -and $test.Live -and $answer.passed -eq $true -and $test.AuditPassed -and $answer.ledger_intact -eq $true -and $answer.delivered -eq $true -and ($test.Roles -join ',') -ceq 'research-lead,research-reviewer,research-scout,research-worker' -and ($test.Scenarios -join ',') -ceq 'S1,S2,S3') {
+            $test.Passed = $true; $test.ErrorCode = ''
+        } else { $test.ErrorCode = 'LiveTestPending' }
     } catch { $test.ErrorCode = 'LiveTestEvidenceRejected' }
     return [pscustomobject]$test
 }

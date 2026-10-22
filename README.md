@@ -1,244 +1,44 @@
-# Hermes Easy Setup
-
-## 실행 파일 선택
-
-- **다른 PC에서 연구실 마법사 실행:** 이 저장소에서 `Code → Download ZIP`으로 받아 압축을 전부 푼 뒤 `Start-HermesResearchSetup.cmd`를 더블클릭하세요. Git for Windows와 WSL2가 준비된 Windows 10/11 x64에서 `로컬 서버 → Hermes·모델 → 에이전트 4개` 순서로 진행합니다. Docker는 없으면 동의 후 설치할 수 있습니다. 작업 폴더·도구·실행 한도의 제안값을 화면에서 확인하고 모델·공개 웹 사용을 선택하면, JSON 작성 없이 실제 분업 테스트까지 진행합니다.
-- **1인 연구실:** `Start-HermesResearchSetup.cmd` — 같은 Windows PC에 Mattermost·Hermes·관리/조사/분석/감사 프로필을 구성합니다. 설치 테스트를 통과한 뒤 Mattermost에서 `@research-lead ○○에 대한 보고서 작성해줘`라고 요청하면 총괄 계획·배정 → 조사 → 분석 → 감사 → 결과 종합이 자동 진행됩니다. 실제 총괄 봇의 사용자 이름을 멘션하세요. [개인 연구실 안내](docs/research-guide.ko.md)
-- **사용자용:** `Start-HermesEasySetup.cmd` — 기존 연구실 서버에 Mattermost Desktop·Hermes 봇 연결.
-- **관리자용 (Windows 테스트 배포):** `Start-HermesAdminSetup.cmd` — 별도 Docker Mattermost 서버·시스템 관리자·팀·채널, Bot Control, 봇·토큰 발급, 선택적 NetBird 공유. [관리자 설치 안내](docs/admin-guide.ko.md)
-
-관리자용은 Windows x64 Docker Desktop의 Linux 엔진이 필요합니다. 기본은 `127.0.0.1:18065`이며 NetBird 공유를 명시적으로 선택하면 현재 서버 PC의 NetBird IP에도 바인딩합니다. 기존 서버/GB10은 변경하지 않습니다. Bot Control 0.6.2를 동봉하고 설치 후 업로드를 잠급니다. 관리자 PC에도 Hermes가 필요하면 사용자용 마법사를 별도로 실행합니다. [5단계 검증 범위](docs/admin-step5-validation.ko.md)
-
-개인 연구실용에서는 Docker 설치 위치·공식 서명·Linux 엔진·PC 조건을 확인하고, 미설치 시 별도 동의 후 고정 공식 설치 파일을 다운로드·검증·설치합니다. Docker 약관은 직접 확인하며 Windows 기능·보안 정책·재부팅을 자동 처리하지 않습니다. 설치 완료와 엔진 준비 완료는 구분합니다. Docker 없는 설치 경로는 대안 안내만 제공하며 아직 구현되지 않았습니다.
-
-연구실 마법사는 **기존 Hermes 사용**을 별도로 선택할 수 있습니다. 기존 설치를 고정 버전으로 덮어쓰지 않고 데이터·코드 경로를 확인하며, 저장된 인증을 복사하거나 새 로그인하지 않습니다. 이 모드는 사용자가 선택해 신뢰하는 로컬 소스 설치의 호환성 검사이며, 새 설치의 고정 commit·attestation 검증과는 구분됩니다. 개인 프로필·Gateway는 유지하며, 마법사가 소유한 이전 연구팀은 별도의 전환 선택으로 기록을 보존하면서 연결할 수 있습니다.
-
-0.12.1 연구실 경로는 권한·감사 중개 서비스 하나에서 프로그램이 분업 순서를 관리합니다. 총괄 계획 → 조사와 원문 확보 → 조사 중간 감사 → 분석 → 분석 중간 감사 → 총괄 종합 → 종합 중간 감사·최종 감사 순서이며, 반려되면 해당 담당자가 새 버전을 작성하고 종속 단계도 재검사합니다. 총괄 혼자 보고서를 작성하는 경로로 우회하지 않습니다. 제공된 네 페르소나 TXT 전체를 공통 규칙 중복 없이 시스템 지침으로 읽습니다.
-
-조사에는 API 키가 필요 없는 DuckDuckGo 공개 검색과 HTTPS HTML·텍스트 원문 읽기가 연결됩니다. 답변·배정·결과는 같은 스레드에 남고, 봇 간 전달에는 실제 사용자 이름의 명시적 멘션이 필요하며, 관리 에이전트만 다른 봇 발언을 자동 관찰합니다. 사람의 채널 열람 권한은 바뀌지 않습니다. 설치된 모델·네 역할·검색·원문·감사·스레드 기록이 실제 테스트에서 모두 확인되어야 **사용 준비 완료**가 됩니다. 소스 ZIP 다운로드나 오프라인 테스트 통과는 각 PC의 사용 준비 완료를 뜻하지 않습니다.
-
-기존 네 연구 봇은 전환 체크박스를 선택하면 설정을 백업하고 대화·세션·산출물 기록을 유지하면서 전환합니다. 정확한 소유권을 확인한 연구팀 예약 작업만 중지하며, 해당 네 프로필의 기존 연결을 주차·분리한 뒤 새 서비스를 시작합니다. 개인 Gateway 호스트 전체를 중지하지 않으며, 이전 응답 경로가 분리되었는지 확인하지 못하면 새 엔진을 시작하지 않습니다. 감사가 끝난 결과는 검토 보고서이며 외부 게시·사용자 최종 승인을 대신하지 않습니다.
-
-Windows에서 [NousResearch Hermes Agent](https://github.com/NousResearch/hermes-agent)를 설치하는 한국어 안전 마법사입니다.
-
-이 프로젝트는 Nous Research의 공식 제품이 아닌 비공식 커뮤니티 도구입니다. Hermes 자체의 사용법과 지원 범위는 [공식 문서](https://hermes-agent.nousresearch.com/docs/)를 기준으로 합니다.
-
-## 설치 설명서
-
-처음 설치한다면 [단계별 설치 설명서](docs/installation-guide.ko.md)를 먼저 읽어 주세요. 준비물, 화면별 입력 예시, Codex 인증, Mattermost 연결, 완료 테스트와 오류 해결 방법을 정리했습니다.
-
-공개용 설명서에는 실제 내부 주소나 개인 인증값을 넣지 않았습니다. 서버 주소·봇 토큰·홈 채널 ID는 관리자에게 별도로 받고, NetBird IPv4에는 설치하는 PC의 주소를 사용하세요. Dashboard의 공개 초기값은 아래와 같이 안내합니다.
-
-## 현재 상태
-
-- 버전 `0.12.1` 자동 분업 개인 연구실용 마법사 + 기존 Windows 네이티브 사용자용·별도 관리자 테스트 마법사
-- 6개 화면에서 Hermes 설치·검증, Mattermost Desktop 설치·서버 등록, OpenAI Codex OAuth와 모델 선택, 독립 프로필, NetBird Dashboard, 부팅 Gateway, Bot Control 등록과 매주 업데이트까지 구성합니다.
-- 위 6개 화면은 사용자용입니다. 관리자용 서버 설치·계정 생성·Bot Control·봇/토큰 발급은 별도 `Start-HermesAdminSetup.cmd`에서 진행합니다. 프로젝트의 5단계 개발 계획과 사용자 마법사의 6개 화면은 별개입니다.
-- 봇 발급·재사용, 공유 실패 시 롤백, 사용자 봇 토큰·채널 사전 검사, 관리자용/사용자용 ZIP 분리 패키징을 지원합니다. 다른 PC에서 실제 Hermes·LLM 응답까지의 최종 승인은 [두 PC 체크리스트](docs/two-pc-checklist.ko.md)를 따라 진행해야 합니다.
-- Nous Portal·OpenRouter·일반 provider 목록·Discord·Slack·Telegram·Spotify·클라우드 터미널·미디어 provider·전체 도구 설정 화면은 이 연구실용 흐름에서 노출하지 않습니다.
-- 이전 마법사가 남긴 exact `Completed` 설치 기록이 안전 조건을 충족하면 재설치 없이 Codex 인증과 연구실 연결을 계속할 수 있습니다.
-- 선택적 Browser/TUI npm 의존성, Computer Use 사전 설치와 Hermes Desktop 자동 빌드는 후속 버전으로 미룹니다. v0.1.2 GUI는 Computer Use/Desktop 옵션을 고정하며 CLI 설치에는 `-SkipComputerUse`가 필요합니다.
-- Windows 10/11 x64에서 로컬 및 CI 검증
-- ARM64는 Hermes upstream Tier 1 대상이지만 이 마법사는 아직 실기기 미검증
-- Windows PowerShell 5.1과 PowerShell 7 단위 테스트
-- 검토된 Hermes 릴리스 `v2026.8.19` 고정
-- 실제 설치 전 변경 계획, 계획 지문, 명시적 승인
-- 단계별 체크포인트와 attestation이 함께 남은 제한적 비정상 종료만 안전 재개
-- 로컬 전용 정제 로그와 진단 ZIP
-
-현재 배포물은 코드 서명이 없는 `.cmd`/PowerShell 소스입니다. 공식 Hermes 설치기나 Nous Research의 서명을 대신하지 않습니다. 제거·초기화 기능도 제공하지 않습니다.
-
-## 개인 연구실용 / 관리자용 / 사용자용 ZIP 만들기
-
-저장소 소스에서 Windows PowerShell로 실행합니다. 출력 폴더는 소스 폴더 밖의 새 경로를 지정하세요.
-
-```powershell
-.\Build-Distributions.ps1 -DestinationRoot C:\Temp\Hermes-0.12.1
-```
-
-`Hermes-Research-Setup-0.12.1.zip`, `Hermes-Admin-Setup-0.12.1.zip`, `Hermes-User-Setup-0.12.1.zip`, `SHA256SUMS.txt`가 만들어집니다. Research ZIP에는 자동 분배 엔진·웹 도구·전환 코드·네 TXT·설치 중 실제 테스트가 포함되며 ZIP 안에는 파일별 `FILES.sha256`도 있습니다. 소스 허용 목록만 패키징하며 개인 설치 상태·토큰·로그·Git 기록은 포함하지 않습니다. 같은 이름의 파일은 덮어쓰지 않습니다. 생성·해시 대조·압축 해제 후 세 GUI의 비설치 검사는 `tests/Run-DistributionTests.ps1`로 실행합니다. 빌드가 GitHub 게시나 코드 서명 또는 설치 PC의 실제 분업 검증을 수행하지는 않습니다.
-
-## 빠른 시작
-
-다른 Windows PC에서 테스트할 때는 관리자가 전달한 `Hermes-User-Setup-<버전>.zip` 또는 해당 버전이 게시된 저장소/Release를 사용하세요. 로컬 빌드가 GitHub에 자동 업로드되는 것은 아닙니다. 압축을 모두 푼 폴더에서 실행해야 합니다.
-
-미리 준비할 항목:
-
-- Windows 10/11 x64와 Program Files에 설치한 [Git for Windows](https://gitforwindows.org/)
-- 연구실 NetBird 연결 및 Mattermost 서버 접근
-- 사용할 ChatGPT/Codex 계정, 해당 봇의 Mattermost 토큰과 홈 채널 ID
-- Dashboard 초기값은 사용자 이름 `admin`, 비밀번호 `12345678`이며 미리 입력되어 있습니다. 필요하면 연결 전에 변경할 수 있습니다.
-
-1. 이 저장소의 GitHub Release 또는 소스 저장소에서만 파일을 받습니다.
-2. Release가 제공되면 함께 게시되는 `SHA256SUMS`와 다운로드 파일을 대조합니다.
-3. 압축을 풀고 `Start-HermesEasySetup.cmd`를 더블클릭합니다.
-4. `PC 확인` 결과를 읽습니다.
-5. 설치 옵션, 세 경로, tag 객체, peeled commit, 설치기와 manifest 해시를 검토합니다.
-6. 동의 체크박스를 직접 선택한 뒤 설치를 시작합니다.
-7. 4단계에서 Mattermost 서버 주소와 표시 이름을 확인하고 설치·등록을 승인합니다. 기존 Desktop은 재사용하며 없는 경우만 공식 x64 MSI를 설치합니다. 앱을 열어 해당 서버의 사람 계정으로 로그인합니다.
-8. 5단계에서 OpenAI Codex 인증 상태를 확인합니다. 로그인이 필요하면 버튼을 누르고 열린 브라우저에서 OAuth만 승인합니다.
-9. 설치된 Hermes가 제공하는 Codex 모델 목록에서 기본 모델을 선택합니다. 기본 선택은 `gpt-5.6-terra`입니다.
-10. 6단계에서 프로필 이름·Full name·역할, Mattermost URL·봇 토큰·홈 채널과 NetBird IP를 입력합니다. Dashboard는 미리 입력된 `admin` / `12345678`로 연결하거나 원하는 값으로 바꿀 수 있습니다.
-11. UAC를 승인하면 Gateway와 Dashboard가 숨김 S4U 작업으로 Windows 부팅 시 시작되고, 매주 일요일 04:00 업데이트 작업이 등록됩니다.
-12. 설치 검증 로그는 성공했지만 마지막에 실패로 표시된 PC라면 `PC 확인`을 다시 실행하세요. 완료 기록·official origin·pin·경로가 모두 맞으면 `기존 설치 설정 계속`이 나타납니다.
-
-Hermes 설치와 Codex 인증에는 관리자 권한이 필요하지 않습니다. Mattermost Desktop을 새로 설치할 때와 Windows 부팅 작업을 등록할 때 각각 UAC 승인이 필요할 수 있습니다. 부팅 작업은 관리자나 SYSTEM이 아니라 현재 사용자 권한의 S4U 방식으로 실행되며 Windows 암호를 저장하지 않습니다.
-
-## Mattermost Desktop 연결
-
-- 공식 `6.3.0` x64 MSI의 URL·SHA-256을 `config/mattermost-desktop.json`에 고정하고 배포자 Authenticode 서명까지 확인합니다. 검증 실패 시 실행하지 않습니다.
-- 설치된 MSI/EXE Desktop을 재사용하며 자동 업그레이드·다운그레이드·제거하지 않습니다. Store 또는 경로를 확인할 수 없는 설치는 중복 설치 없이 중단합니다.
-- `%APPDATA%\Mattermost\config.json`의 v1~v3 `teams`, v4 `servers` 형식을 구분합니다. 기존 서버·순서·선택·기타 설정은 보존하고 같은 URL은 중복 추가하지 않습니다.
-- 변경 전 `config.before-hermes-<고유값>.json` 사본을 같은 폴더에 남깁니다. 알 수 없는 형식, 손상 파일, 링크 경로는 변경하지 않습니다. 쿠키·로그인 저장소는 접근하지 않습니다.
-- 서버를 추가해야 하는데 앱이 실행 중이면 트레이에서 종료한 뒤 재시도하도록 안내합니다. 강제 종료하지 않습니다.
-- 서버 ping 결과와 사람 계정 로그인은 별개입니다. 오프라인이면 NetBird·주소를 확인한 뒤 재시도하고, 계정이 없으면 관리자의 초대 링크로 가입합니다. 봇 토큰은 로그인 비밀번호가 아닙니다.
-- CLI: `-Action MattermostSetup -Apply -MattermostServerURL <서버주소> -MattermostServerName <표시이름>`
-
-근거: [공식 Windows 배포 안내](https://docs.mattermost.com/deployment-guide/desktop/silent-windows-desktop-distribution), [6.3.0 실제 설정 형식](https://github.com/mattermost/desktop/blob/v6.3.0/src/common/config/defaultPreferences.ts).
-
-CLI로 계획만 확인할 수도 있습니다.
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\HermesEasySetup.ps1 `
-  -Action Plan -SkipComputerUse -Json
-```
-
-실제 설치는 `-Apply`를 명시해야 시작됩니다.
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\HermesEasySetup.ps1 `
-  -Action Install -Apply -SkipComputerUse
-```
-
-## 연구실 연결 단계 (사용자용 마법사)
-
-- 새 프로필은 기본 프로필을 복제하지 않고 생성하므로 SOUL, 메모리, 세션과 대화 기록이 분리됩니다. Codex 인증 저장소만 Hermes의 정상 동작대로 공유됩니다.
-- 선택한 모델에 `openai-codex`를 고정하고 로컬 터미널, `display.tool_progress=log`, 압축 임계값 `0.85`, 자동 세션 초기화 없음이 적용됩니다.
-- 기존 Mattermost·Slack·Discord 등 메시징 연결값을 제거하고 입력한 Mattermost 값만 저장합니다.
-- Mattermost는 연구실 사용자 전체 허용, 채널 @멘션 시에만 응답, DM은 멘션 없이 응답, 새 채널 답변은 일반 대화, 기존 스레드 요청은 해당 스레드 응답으로 고정됩니다.
-- Dashboard와 Gateway는 감지된 NetBird IPv4에 맞춰 현재 사용자 권한의 숨김 S4U Scheduled Task로 Windows 부팅 시 시작합니다.
-- 매주 일요일 04:00 `hermes update --yes`를 실행하고 성공한 경우에만 프로필 Gateway와 Dashboard를 재시작합니다.
-- Mattermost 봇 토큰은 Bot Control 등록 요청의 Bearer 인증에만 사용하고 마법사 로그·명령행·등록 데이터에 저장하지 않습니다.
-- GUI에서 worker로 넘기는 봇 토큰과 Dashboard 비밀번호는 Windows DPAPI CurrentUser로 암호화한 임시 파일을 사용하며 작업 종료 시 삭제합니다.
-- Bot Control 0.6.0 이상이 설치되어 있어야 자동 등록이 성공합니다. Mattermost 서버에서 해당 NetBird Dashboard URL에 접근할 수 없으면 등록 단계에서 중단합니다.
-- Dashboard 시작은 최대 240초 기다린 다음 로그인과 실제 인증 세션까지 검증합니다. 시작 지연과 로그인 실패는 별도로 표시합니다.
-- Dashboard 초기값 `admin` / `12345678`은 누구나 알 수 있는 공통 계정이므로 신뢰하는 NetBird 사용자에게만 접근을 허용하거나 연결 전에 비밀번호를 변경하세요. 기존 Dashboard 비밀번호가 자동으로 바뀌지는 않지만, 마법사에서 연구실 연결을 실행하면 현재 입력값이 적용됩니다. 기존 프로필 재설정 시에도 사용할 인증값을 확인하세요.
-- 재시도 시 이 프로필의 관리 대상 Gateway·Dashboard 예약 작업만 재시작합니다. 실패한 뒤 같은 창에서 입력값을 유지하고 기존 프로필로 다시 시도할 수 있습니다.
-
-다른 컴퓨터에서의 설치 및 Bot Control 자동 등록 전체 흐름은 실제 테스트가 필요합니다. 단위·GUI 테스트 통과만으로 모든 PC의 연결 성공을 보장하지는 않습니다.
-
-## 예상되는 시스템 변경
-
-승인 뒤 공식 Hermes 설치기는 다음 작업을 할 수 있습니다.
-
-- 기본 `%LOCALAPPDATA%\hermes`에 코드, venv, managed Node/uv, 설정 템플릿과 Hermes 데이터 폴더 생성 또는 업데이트
-- `%LOCALAPPDATA%\hermes\hermes-agent\bin`을 사용자 PATH에 추가하고 `HERMES_HOME` 사용자 환경 변수 설정 또는 갱신
-- Python, managed uv와 후속 도구 설정을 위한 managed Node 등 core CLI 실행 기반 다운로드
-- 임의의 기존 checkout 채택·업데이트는 거부합니다. `-Resume`은 같은 마법사가 만든 동일 계획/manifest checkpoint와 launcher attestation v1의 전체 정적 provenance가 함께 남은 경우에만 공식 idempotent 단계를 다시 적용합니다.
-- v0.1.2는 선택적 Browser/TUI npm 의존성 설치, Computer Use 사전 설치와 Electron Desktop 빌드를 실행하지 않음
-
-마법사의 캐시, 체크포인트와 로그는 별도 `%LOCALAPPDATA%\HermesEasySetup`에 저장됩니다. 백업·제거·강제 downgrade는 하지 않습니다. 처리된 실패는 새 PATH/HERMES_HOME 노출, exact fresh launcher, 이번 실행의 attestation과 launcher exclude 변경을 compare/CAS 방식으로 되돌리므로 보통 다음 `-Resume`에 필요한 attestation도 남지 않습니다. `-Resume`은 attestation 발급 뒤 프로세스가 비정상 종료되어 동일 계획/manifest의 Running 또는 Failed checkpoint와 attestation이 모두 살아남은 제한된 경우에만 허용됩니다. 그 밖의 기존 경로는 새 빈 InstallDir에서 다시 시작해야 하며, 기존 설치 경로를 직접 삭제하거나 초기화하기 전에는 진단 로그를 검토하세요.
-
-## 안전 흐름
-
-1. Windows 버전, PowerShell, CPU 아키텍처, 대상 경로와 여유 공간을 읽기 전용으로 확인합니다.
-2. `InstallDir == HermesHome\hermes-agent`와 별도 RuntimeRoot를 강제하고 foreign checkout/reparse 경로를 거부합니다.
-3. annotated release tag와 실제 peeled commit을 구분해 기록합니다.
-4. 정확한 commit raw URL 또는 정확한 Git blob API 경로에서 설치기를 받습니다.
-5. 바이트 크기, SHA-256, PowerShell AST를 검증합니다.
-6. 공식 stage protocol과 전체 manifest를 검토된 계약과 대조합니다.
-7. 승인 지문을 첫 변경 직전에 다시 계산합니다.
-8. `needs_user_input=false` 단계만 별도 프로세스로 실행하고 매 단계 직전 설치기를 재해시합니다.
-9. 상류 설치기의 `configure`와 `gateway` 대화형 단계는 실행하지 않고, 검증 후 마법사의 제한된 Codex·Mattermost 설정만 비대화형으로 적용합니다.
-10. fresh repository 직후 clean proof를 만들고 path 단계가 만든 정확한 PE launcher 두 개만 `.git/info/exclude`에 등록한 뒤, commit·설치기 digest·경로·launcher hash를 RuntimeRoot의 canonical attestation에 묶습니다.
-11. repository-aware Git 실행 전 raw `.git/config` 허용 목록, `commondir`, `config.worktree`, active `info/attributes`, alternates를 파일 I/O로 검사하고, hooks/fsmonitor/system·global 설정을 격리합니다.
-12. Hermes 코드를 실행하기 전에 attestation과 launcher를 다시 읽고 marker, raw origin, top-level/git-dir, HEAD/index tree, index flags와 clean status를 모두 확인합니다.
-13. 검증된 CLI 설치 상태를 확정한 뒤 Codex OAuth 브라우저 승인만 외부에서 진행하며, 모델과 나머지 설정은 모두 마법사 화면에서 선택·검증합니다.
-
-실행되는 기본 단계에는 종류에 따라 30분 또는 90분의 상한이 있으며 timeout 시 해당 프로세스 트리를 종료합니다. path snapshot 이후 후속 단계나 최종 Verify가 실패해도 PATH/HERMES_HOME, exact launcher, attestation과 이번 실행의 exclude 변경은 각각 독립적으로 복구를 시도합니다. checkout, 다운로드된 dependencies와 실패 checkpoint까지 되돌리는 제거·트랜잭션 기능은 아닙니다.
-
-설치 상태와 설정 상태는 별도로 검증합니다. Codex 단계는 `hermes auth status openai-codex`, 마지막 단계는 Dashboard HTTP 상태와 Gateway 상태를 확인합니다. OAuth 토큰, 봇 토큰과 Dashboard 비밀번호는 작업 로그나 진단 ZIP에 넣지 않습니다.
-
-## 보존 원칙
-
-진단 ZIP은 Hermes 홈을 순회하거나 인증 정보·메모리·대화를 수집하지 않습니다. 사용자가 연구실 연결을 실행하면 선택한 프로필의 `.env`, `config.yaml`, `SOUL.md` 및 공용 Dashboard 인증 설정을 읽거나 갱신합니다. Codex 인증은 Hermes 명령을 통해 처리합니다.
-
-진단 정제는 best-effort입니다. 알려진 토큰과 사용자 경로를 치환하지만 모든 민감정보를 수학적으로 보장할 수는 없습니다. ZIP은 자동 업로드되지 않으며, 공유 전 사용자가 직접 열어 보고 사용 후 삭제해야 합니다.
-
-## 공급망 경계
-
-직접 보장하는 범위는 다음과 같습니다.
-
-- 공식 repository와 annotated tag 객체, peeled commit 연결
-- 해당 commit tree의 `scripts/install.ps1` Git blob, 크기, SHA-256
-- signed Microsoft System32 Windows PowerShell만 설치기 host로 사용
-- Program Files의 서명된 Git for Windows를 필수로 확인하고, 상류가 매 stage 다시 읽는 User+Machine PATH에서도 그 파일이 첫 `git` 후보인지 실행 직전마다 검사하며 PATHEXT와 PowerShell module 경로를 축소
-- 새 repository clone에는 일회성 Git global/attributes 설정으로 LF checkout을 선행 적용하고, 기존/검증 checkout에는 system·user global·hook·fsmonitor 격리를 적용
-- stage protocol 및 manifest의 fail-closed 검증
-- fresh checkout in-memory proof 뒤에만 발급되는 write-once canonical launcher attestation과 exact launcher exclude 두 패턴
-- repository-aware Git 이전의 raw metadata gate, 실행 전 raw origin, Git layout/index 및 launcher·attestation 정적 검증
-- 승인되지 않은 호스트, 캐시 변조와 예상 밖 단계 거부
-
-fresh clone은 RuntimeRoot의 빈 global attributes/excludes와 `core.autocrlf=false`를 사용하되 system Git 설정과 표준 프록시 환경 변수는 유지합니다. 기존/재개 checkout의 모든 stage와 정적 검증은 별도 managed global 설정을 쓰고 system 설정까지 끕니다. 어떤 모드도 사용자의 `~/.gitconfig`를 읽거나 수정하지 않으므로 user-global에만 둔 프록시, 사설 CA, credential helper는 적용되지 않습니다.
-
-`state\launcher-attestation-v1.json`은 same-run fresh proof가 확인한 연속성과 우발적 변조를 탐지하는 기록이며 서명이나 MAC이 아닙니다. 같은 사용자 권한으로 RuntimeRoot와 InstallDir을 함께 바꾸고 attestation까지 다시 쓰는 공격에 대한 암호학적 진위를 보장하지 않으며, 전체 venv와 전이 의존성도 attestation 범위 밖입니다.
-
-현재 안전 경계에서는 [공식 Git for Windows](https://gitforwindows.org/)가 Program Files에 미리 설치되어 있어야 합니다. 공식 Hermes 설치기의 해시 미고정 portable Git 다운로드 경로는 실행하지 않습니다.
-
-v0.1.x는 상류 설치기의 경로 표기 변환과 wrapper의 복구 계약이 어긋나지 않도록 DOS 8.3 짧은 경로(`FIRSTL~1` 형태)를 거부합니다. 기본 GUI 경로나 직접 지정하는 긴 절대 경로를 사용하세요.
-
-공식 설치 스크립트가 이후 받는 Python, Node, 시스템 패키지 등 모든 전이 산출물의 완전한 재현성까지 보장하지는 않습니다. 자세한 내용은 [SECURITY.md](SECURITY.md)를 참고하세요.
-
-## CLI 작업
-
-| 작업 | 설명 | 시스템 변경 |
-|---|---|---:|
-| `Diagnose` | 설치 준비 상태 확인 | 없음 |
-| `Plan` | 고정 소스와 변경 계획 표시 | 없음 |
-| `Install` | 공식 비대화형 단계 실행 | `-Apply` 필요 |
-| `Verify` | 대상 설치와 고정 commit 확인 | 없음 |
-| `Setup` | 보이는 공식 설정 프로세스 시작·종료 추적(구성 완료 판정 아님) | 사용자 입력에 따라 변경 |
-| `CodexStatus` | OpenAI Codex 인증 상태와 Hermes 모델 카탈로그 확인 | 없음 |
-| `CodexAuth` | 브라우저 OAuth 후 Hermes 인증 상태 확인 | `-Apply` 필요 |
-| `LabSetup` | 암호화된 GUI 입력으로 프로필·Mattermost·Dashboard·Gateway·Bot Control 등록 구성 | `-Apply` 필요 |
-| `Bundle` | 정제된 로컬 진단 ZIP 생성 | 마법사 진단 폴더만 |
-
-주요 종료 코드는 `0` 성공, `2` 승인/인수/재개 오류, `10` 사전 점검 실패, `20` 소스 검증 실패, `30` protocol 불일치, `40` 설치 단계 실패, `50` 최종 검증 실패입니다.
-
-## 개발 및 검증
-
-네트워크나 Hermes 설치 없이 로컬 검증을 실행합니다.
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-RepositoryHygiene.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-PowerShellSyntax.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-Tests.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-CodexRuntimeTests.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-ExistingRuntimeTests.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-SecurityTests.ps1
-powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\tests\Run-GuiTests.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-LabDashboardTests.ps1
-```
-
-상류 tag→commit→blob, base manifest와 Desktop manifest의 drift만 다시 확인하려면 다음을 실행합니다. Hermes 설치 단계는 0개 실행되며 Desktop manifest 확인은 v0.1.2의 Desktop 설치 지원을 의미하지 않습니다.
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-UpstreamContractSmoke.ps1
-```
-
-실제 Hermes 설치 E2E는 비용과 시간이 커서 `Windows install E2E` 수동 workflow에서만, 자격증명과 setup 없이 일회성 GitHub runner에 실행합니다. 현재 CI의 ARM64 실기기 검증은 아직 없습니다.
-
-구조는 [docs/architecture.md](docs/architecture.md), pin 갱신은 [docs/updating-the-pin.md](docs/updating-the-pin.md), 기여 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다. 버전은 자동으로 최신 upstream을 따라가지 않으며 검토된 pin 변경과 새 release를 통해서만 갱신됩니다.
-
-## 라이선스
-
-마법사 코드는 [MIT License](LICENSE)로 배포됩니다. Hermes Agent는 별도 프로젝트이며 해당 저장소의 라이선스와 정책을 따릅니다.
-
-
-## Word 보고서 기본 출력
-
-보고서는 기본적으로 Word(.docx) 파일로 같은 요청 스레드에 첨부됩니다. 조사·분석·종합의 중간 감사와 최종 감사를 통과한 정확한 원문을 프로그램이 변환합니다. Word 작성용 프로그램이나 추가 Python 패키지 설치는 필요 없습니다. 업로드 뒤 실제 파일을 다시 내려받아 SHA-256을 비교하며, 설치 마법사의 실제 테스트도 Word 전달 확인까지 통과해야 완료됩니다. 모델은 파일 경로·수신 채널·첨부 파일을 임의로 지정할 수 없습니다.
-
-일시적인 모델 오류·복구 가능한 응답 형식 오류는 2·5·10초 간격으로 최대 3회 재시도합니다. 자료 접근 오류는 5초 뒤 재시도하고, 실패가 반복되면 다른 검색어·자료를 검토하되 단계별 한도에서 보류합니다. 검색 제공자의 차단·장애를 우회하거나 성공으로 표시하지 않습니다. 인증·사용 한도·요청 규격 문제와 전송 여부가 불확실한 첨부는 중복 실행하지 않고 확인 대기 상태로 보존합니다.
-
-학술 자료는 검색어에 site:arxiv.org 를 포함하면 공식 arXiv API로 검색합니다. 반환된 초록 메타데이터는 원문 열람으로 세지 않으며 read_web을 별도로 실행해야 합니다. 일반 웹 검색의 장애·차단이 해소되었다는 뜻은 아닙니다. API 안내: https://info.arxiv.org/help/api/user-manual.html
+# Hermes Research Setup 0.18.0 — 한국어 작업 보드 · 3+1 프리릴리스
+
+Windows용 연구팀 설치 마법사의 현재 개발 버전입니다. 기존 3+1·전체 페르소나·강제 감사를 유지합니다.
+최신 후보의 전체 실설치 검증은 사용자 요청으로 중단했으므로, 검증 완료된 정식 배포본으로 표시하지 않습니다.
+구후보의 실제 통과 기록과 최신 후보의 검증 상태는 [0.18.0 검증 범위](docs/verification-0.18.0.md)에서 구분합니다.
+
+별도 한국어 웹 보드에서 프로젝트·작업 카드·결과 문서·승인 요청과 실제 도구 행동 기록을 봅니다.
+Mattermost에는 접수·중요 문제·사용자 확인·최종 결과만 간단히 보고합니다.
+마법사 3단계의 **실시간 작업 보드 열기** 또는 작업 폴더의 `Research Board.url`로 엽니다.
+화면 구성은 제공받은 포크의 흰색·초록색 카드 보드를 기준으로 했습니다.
+설치 검증과 실제 연구 프로젝트는 별도 화면이며, 보드를 열었다고 설치 검증이 통과하지 않습니다.
+자세한 범위는 [한국어 보드 안내](docs/research-board.ko.md)를 확인하세요.
+
+## 실행
+
+연구용 ZIP을 전부 풀고 `Start-HermesResearchSetup.cmd`를 실행합니다.
+순서는 **로컬 Mattermost 서버 → Hermes·기존 모델 연결 → 기본설정 자동 구성·실제 설치 검증**입니다.
+관리자 계정, 모델 연결과 전송 동의는 사용자가 확인해야 합니다. 네 봇·토큰은 버튼 하나로 발급·재사용합니다.
+현재 개발 중인 서버와 같은 포트·프로필을 대상으로 시험하지 마세요.
+
+## 선택한 조합
+
+- 총괄·조사·분석/집필·감사의 3+1, 기존 전체 페르소나 유지.
+- 포크의 Git 작업 보드, 독립 역할 실행기, 결과 이벤트에 반응하는 총괄.
+- 포크의 Hermes 파일·터미널·공개 웹 도구와 파일 기반 근거 재사용.
+- 감사자만 블라인드. 요청 충족·근거·방법·수치·일관성·한계를 검수합니다.
+- 중간 감사가 통과한 현재 버전만 후속 작업에 사용하고, 최종 감사 후 첨부를 재다운로드해 검증합니다.
+- 기존 Hermes Codex 연결 기본, LiteLLM 라우터 선택 가능.
+- 기본 한도: 시도당 2000턴, 작업당 최대 50시도, 일시적 모델 오류 최대 100회, 시도당 180분.
+  모든 횟수를 반드시 쓰는 것이 아니며 사용량 상한이 크게 늘어날 수 있습니다.
+- 실제 S1·S2·S3 증거가 없으면 설치 완료로 표시하지 않습니다.
+
+[설치 순서](docs/research-guide.ko.md) · [실행 구조와 권한](docs/research-team.md) ·
+[이번 수정·검증 범위](docs/verification-0.18.0.md) · [이전 실제 비교](docs/verification-0.17.1.md) ·
+[초기 조합 기록](docs/0.17-local-candidate.ko.md)
+
+기존 사용자용 `Start-HermesEasySetup.cmd`와 관리자용 `Start-HermesAdminSetup.cmd`도 유지했습니다.
+[관리자 안내](docs/admin-guide.ko.md) · [복구 안내](docs/recovery-guide.ko.md)
+
+## 로컬 검증과 배포
+
+`team/build_manifest.py`로 팀 파일 해시를 갱신한 뒤 PowerShell·Python 모의 테스트를 수행합니다.
+`Build-Distributions.ps1 -DestinationRoot <별도 출력 폴더>`는 세 용도의 ZIP과 SHA256SUMS.txt를 만듭니다.
+개인 인증·런타임·실험 기록은 패키지에 포함하지 않습니다.

@@ -4,5 +4,7 @@
 *.cmd text eol=crlf
 *.json text eol=lf
 *.md text eol=lf
-# Persona integrity is byte-pinned, including the supplied CRLF line endings.
-/assets/research-prompts/*.txt -text whitespace=cr-at-eol
+# The team payload is hash-pinned (team/manifest.json): keep its bytes identical on every checkout.
+/team/** text eol=lf
+# Preserve the original persona bytes used by the pinned payload manifest.
+/team/**/SOUL.md -text
