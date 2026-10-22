@@ -43,7 +43,7 @@ jobs:
           Copy-Item docs/release-notes.ko.md $notes
           $files = @($built.Packages | ForEach-Object Path) + @($built.Checksums)
           $releaseOptions = @('--latest')
-          if ($version -ceq '0.18.0') { $releaseOptions = @('--prerelease', '--latest=false') }
+          if ($version -cin @('0.18.0','0.19.0')) { $releaseOptions = @('--prerelease', '--latest=false') }
           gh release create $tag @files --target $env:GITHUB_SHA --title ('Hermes Easy Setup ' + $version) --notes-file $notes @releaseOptions
           if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }
   windows:
@@ -61,6 +61,15 @@ jobs:
       - name: PowerShell syntax and encoding
         shell: powershell
         run: .\tests\Test-PowerShellSyntax.ps1
+
+      - name: Mattermost board plugin webapp registration
+        shell: powershell
+        run: node tests/test_mattermost_plugin_webapp.cjs
+
+      - name: Mattermost board plugin server permissions
+        shell: pwsh
+        working-directory: plugins/research-board
+        run: go test -mod=readonly ./server
 
       - name: Unit tests on Windows PowerShell 5.1
         shell: powershell
@@ -145,6 +154,7 @@ jobs:
           .\tests\Run-ResearchRuntimeTests.ps1
           .\tests\Run-ResearchDefaultsTests.ps1
           .\tests\Run-ResearchMigrationTests.ps1
+          .\tests\Run-ResearchPluginsTests.ps1
           powershell.exe -NoLogo -NoProfile -STA -ExecutionPolicy Bypass -File .\HermesResearchSetup.Gui.ps1 -SmokeTest
 
       - name: Offline research team tests (board runner, team service, model router)

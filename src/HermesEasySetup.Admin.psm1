@@ -543,4 +543,5 @@ function Invoke-HermesAdminSetup {
 
 . (Join-Path $PSScriptRoot 'HermesEasySetup.AdminBots.ps1')
 . (Join-Path $PSScriptRoot 'HermesEasySetup.AdminNetwork.ps1')
-Export-ModuleMember -Function @('Get-HermesAdminRoot','Get-HermesAdminPin','Assert-HermesAdminInput','Get-HermesAdminPreflight','Invoke-HermesAdminSetup','Assert-HermesAdminBotInput','Invoke-HermesAdminBotSetup','Read-HermesAdminBotCredential')
+. (Join-Path $PSScriptRoot 'HermesEasySetup.ResearchPlugins.ps1')
+Export-ModuleMember -Function @('Get-HermesAdminRoot','Get-HermesAdminPin','Assert-HermesAdminInput','Get-HermesAdminPreflight','Invoke-HermesAdminSetup','Assert-HermesAdminBotInput','Invoke-HermesAdminBotSetup','Read-HermesAdminBotCredential','Invoke-HermesResearchPluginsSetup')

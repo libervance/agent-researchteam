@@ -20,7 +20,7 @@ foreach ($name in @(
     'TeamServerURL','HomeChannelID','TeamAdminPassword','AgentRows','TeamQuickActions','TeamAdvancedSettings','QuickSetupSummary',
     'ModelModeGateway','ModelModeCodex','GatewayPanel','AnthropicKey','OpenAIKey','LocalBaseURL','LocalModel','GatewayPort',
     'WorkspacePath','WorkspaceBrowseButton','HumanUsername','TaskTimeoutMinutes','ReviewerSlots','SelectedModelSummary','ModelEgressConsent','PublicWebConsent','MigrationConsent',
-    'TeamResumeCheck','TeamConsent','TeamApplyButton','TeamOpenButton','TeamBoardButton','TeamResult','Progress','Log','CloseButton'
+    'TeamResumeCheck','TeamConsent','TeamApplyButton','TeamOpenButton','TeamBoardButton','TeamPluginsButton','TeamResult','Progress','Log','CloseButton'
 )) {
     $ui[$name] = $window.FindName($name)
     if ($null -eq $ui[$name]) { throw "필수 연구실 컨트롤이 없습니다: $name" }
@@ -74,6 +74,7 @@ function Add-ResearchLog {
 function Refresh-ResearchButtons {
     $idle = -not $script:busy
     $ui.CloseButton.IsEnabled = $idle
+    $ui.TeamPluginsButton.IsEnabled = $idle -and (Test-Path -LiteralPath (Join-Path $script:paths.RuntimeRoot 'research\team.json') -PathType Leaf)
     foreach ($name in @('DockerCheckButton','DockerGuideButton','ServerRestoreButton','ServerId','ServerPort',
         'AdminUsername','AdminEmail','AdminPassword','PasswordConfirm','ServerResumeCheck','ServerConsent',
         'HermesConsent','UseExistingHermesCheck','TeamAdminPassword','TeamResumeCheck','TeamConsent',
@@ -481,6 +482,12 @@ function Complete-ResearchWorker {
             else { $script:authenticated = $false; $ui.AuthStatus.Text = 'Hermes 설치 또는 모델 인증 상태를 확인하지 못했습니다. 진행 안내를 확인하세요.' }
             $ui.AuthCode.Clear(); $script:authURL = $null
         }
+        'ResearchPluginsSetup' {
+            if ($success -and $null -ne $result -and $result.Ready) {
+                Add-ResearchLog 'Mattermost 내부 작업보드·NST 브랜딩 적용 완료. 연구팀·검증 기록은 보존했습니다.'
+                $ui.TeamResult.Text = 'Mattermost 왼쪽의 연구 작업보드를 여세요. 기존 창은 새로 고침하세요.' + [Environment]::NewLine + [string]$result.BoardURL
+            }
+        }
         'ResearchTeamSetup' {
             if ($null -ne $result) {
                 $lines = @($result.Profiles | ForEach-Object { '{0} ({1}, 봇 @{2}): {3}' -f $_.DisplayName,$_.ProfileName,$_.BotUsername,$_.Status })
@@ -664,12 +671,22 @@ $ui.HermesNextButton.Add_Click({ if ($script:hermesReady) { $ui.WizardTabs.Selec
 $ui.TeamOpenButton.Add_Click({ if ($script:serverReady) { Start-Process $script:channelURL | Out-Null } })
 $ui.TeamBoardButton.Add_Click({
     try {
+        $pluginRecord = Join-Path $script:paths.RuntimeRoot 'mattermost-plugins\state.json'
+        if (Test-Path -LiteralPath $pluginRecord -PathType Leaf) {
+            $plugin = [IO.File]::ReadAllText($pluginRecord,[Text.Encoding]::UTF8)|ConvertFrom-Json
+            if ($plugin.Ready -and [string]$plugin.BoardURL -cmatch '^http://127\.0\.0\.1:[0-9]{4,5}/[a-z0-9-]+/com\.hermes\.research-board/board$') {
+                Start-Process ([string]$plugin.BoardURL) | Out-Null; return
+            }
+        }
         $recordPath = Join-Path $script:paths.RuntimeRoot 'research\dashboard.json'
         if (-not (Test-Path -LiteralPath $recordPath -PathType Leaf) -or (Get-Item -LiteralPath $recordPath).Length -gt 4096) { throw '연구 웹 보드가 아직 시작되지 않았습니다. 기본설정 자동 구성을 먼저 진행하세요.' }
         $record = [IO.File]::ReadAllText($recordPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
         if ([string]$record.url -cnotmatch '^http://127\.0\.0\.1:[1-9][0-9]{0,4}/$') { throw '연구 보드 주소를 확인할 수 없습니다.' }
         Start-Process ([string]$record.url) | Out-Null
     } catch { Add-ResearchLog $_.Exception.Message }
+})
+$ui.TeamPluginsButton.Add_Click({
+    if (-not $script:busy) { Start-ResearchWorker 'ResearchPluginsSetup' @('-Apply') }
 })
 $ui.TeamApplyButton.Add_Click({
     try {

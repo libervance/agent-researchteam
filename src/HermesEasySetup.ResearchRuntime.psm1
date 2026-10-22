@@ -570,6 +570,8 @@ function Invoke-HermesResearchTeamSetup {
         Start-HermesResearchGatewayTask -Plan $servicePlan
         $null = Wait-HermesResearchServiceReady -ResearchRoot $root -StartedAfter $startedAt -ExpectedChildren ($runners.Count + 2 + $(if ($gateway) { 1 } else { 0 })) -Gateway ($null -ne $gateway)
         $dashboard=Wait-HermesResearchDashboardReady -ResearchRoot $root -StartedAfter $startedAt -WorkspacePath $options.WorkspacePath
+        $boardPlugins=Invoke-HermesResearchPluginsSetup -RuntimeRoot $paths.RuntimeRoot -Python $python -AllowedUserID $humanID -Apply -ProgressCallback $ProgressCallback
+        if(-not $boardPlugins.Ready -or -not $boardPlugins.UploadsLocked){throw 'ResearchMattermostPluginsNotReady'}
         Start-HermesResearchGatewayTask -Plan $leadPlan
         Wait-HermesResearchGatewayReady -CommandPath $command -ProfileName 'research-lead' -Environment $environment -Plan $leadPlan -TimeoutSeconds 90
 

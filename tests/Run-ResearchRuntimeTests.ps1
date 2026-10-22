@@ -11,6 +11,9 @@ Import-Module (Join-Path $projectRoot 'src\HermesEasySetup.ResearchRuntime.psm1'
 # replaced: it never starts Hermes, Python, a model, a request or a task.
 & (Get-Module HermesEasySetup.ResearchRuntime) {
     $script:passed = 0
+    # Plugin integration is tested separately. This entire suite must remain
+    # offline and may never touch the user's real Mattermost or Task Scheduler.
+    function Invoke-HermesResearchPluginsSetup { param($RuntimeRoot,$Python,$AllowedUserID,[switch]$Apply,$ProgressCallback) return [pscustomobject]@{Ready=$true;UploadsLocked=$true} }
     function Assert { param($Ok, [string]$Name) if (-not $Ok) { throw $Name }; $script:passed++; Write-Host "PASS $Name" }
     function Reject {
         param([scriptblock]$Block, [string]$Name, [string]$Contains = '')

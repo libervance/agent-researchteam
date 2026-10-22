@@ -16,17 +16,19 @@ $common = @('HermesEasySetup.ps1','VERSION','LICENSE','README.md','SECURITY.md',
     'src/HermesEasySetup.Loader.psm1','src/HermesEasySetup.Core.psm1','src/HermesEasySetup.Preflight.psm1','src/HermesEasySetup.StateStore.psm1',
     'src/HermesEasySetup.Execution.psm1','src/HermesEasySetup.Protocol.psm1','src/HermesEasySetup.InstallEngine.psm1','src/HermesEasySetup.Existing.psm1','src/HermesEasySetup.Codex.psm1',
     'src/HermesEasySetup.Lab.psm1','src/HermesEasySetup.Mattermost.psm1','src/HermesEasySetup.Docker.psm1','src/HermesEasySetup.Admin.psm1','src/HermesEasySetup.AdminBots.ps1','src/HermesEasySetup.AdminNetwork.ps1','src/HermesEasySetup.Research.psm1','src/HermesEasySetup.ResearchRuntime.psm1','src/HermesEasySetup.ResearchGovernance.ps1','src/HermesEasySetup.Bundle.psm1',
-    'src/HermesEasySetup.ResearchDefaults.ps1','src/HermesEasySetup.ResearchMigration.ps1','src/HermesEasySetup.ResearchGateway.ps1',
+    'src/HermesEasySetup.ResearchDefaults.ps1','src/HermesEasySetup.ResearchMigration.ps1','src/HermesEasySetup.ResearchGateway.ps1','src/HermesEasySetup.ResearchPlugins.ps1',
     'docs/installation-guide.ko.md','docs/admin-guide.ko.md','docs/two-pc-checklist.ko.md','docs/recovery-guide.ko.md','docs/admin-step5-validation.ko.md')
 $package = & (Get-Module HermesEasySetup.Admin) { Get-HermesAdminBotControlPackage }
 # The research team payload is exactly what team/manifest.json lists (the installer re-checks every hash).
 $teamManifest = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'team\manifest.json'), [Text.Encoding]::UTF8) | ConvertFrom-Json
 $teamFiles = @('team/manifest.json') + @($teamManifest.files.PSObject.Properties.Name | ForEach-Object { 'team/' + $_ })
+$researchPluginPin = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'config/mattermost-plugins.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$researchPluginFiles = @('config/mattermost-plugins.json','plugins/research-board/bridge.py','docs/mattermost-plugins.ko.md') + @($researchPluginPin.packages | ForEach-Object {'assets/mattermost-plugins/' + $_.file})
 $roles = @(
     @{ Name = 'User'; Entry = 'Start-HermesEasySetup.cmd'; Files = @('Start-HermesEasySetup.cmd','HermesEasySetup.Gui.ps1','ui/MainWindow.xaml') },
-    @{ Name = 'Admin'; Entry = 'Start-HermesAdminSetup.cmd'; Files = @('Start-HermesAdminSetup.cmd','HermesAdminSetup.Gui.ps1','ui/AdminWindow.xaml',('assets/bot-control/' + $package.Pin.file)) },
+    @{ Name = 'Admin'; Entry = 'Start-HermesAdminSetup.cmd'; Files = @('Start-HermesAdminSetup.cmd','HermesAdminSetup.Gui.ps1','ui/AdminWindow.xaml',('assets/bot-control/' + $package.Pin.file)) + $researchPluginFiles },
     @{ Name = 'Research'; Entry = 'Start-HermesResearchSetup.cmd'; Files = @('Start-HermesResearchSetup.cmd','HermesResearchSetup.Gui.ps1','ui/ResearchWindow.xaml','docs/research-guide.ko.md',
-        'docs/research-team.md','docs/research-board.ko.md','docs/0.17-local-candidate.ko.md','docs/verification-0.17.0.md','docs/verification-0.17.1.md','docs/verification-0.17.2.md','docs/verification-0.17.3.md','docs/verification-0.18.0.md') + $teamFiles }
+        'docs/research-team.md','docs/research-board.ko.md','docs/0.17-local-candidate.ko.md','docs/verification-0.17.0.md','docs/verification-0.17.1.md','docs/verification-0.17.2.md','docs/verification-0.17.3.md','docs/verification-0.18.0.md','docs/verification-0.19.0.md') + $teamFiles + $researchPluginFiles }
 )
 $plans = @()
 foreach ($role in $roles) {

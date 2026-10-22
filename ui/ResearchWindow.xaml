@@ -69,14 +69,15 @@
         <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="20">
           <Border x:Name="TeamQuickActions" Background="#EAF1FF" BorderBrush="#BED0F3" BorderThickness="1" CornerRadius="8" Padding="16" Margin="0,0,0,14">
             <StackPanel>
-              <WrapPanel><Button x:Name="TeamApplyButton" Content="기본설정 자동 구성 · 실제 설치 검증" FontWeight="SemiBold" Background="#245BBA" Foreground="White" IsEnabled="False"/><Button x:Name="TeamBoardButton" Content="실시간 작업 보드 열기"/><Button x:Name="TeamOpenButton" Content="연구 채널 열기" IsEnabled="False"/></WrapPanel>
-              <TextBlock Text="웹 보드: 프로젝트·작업·문서·승인 요청·실시간 행동 기록. Mattermost: 접수·중요 문제·결과만 간단히 보고합니다." TextWrapping="Wrap" Margin="0,8,0,0"/>
+              <WrapPanel><Button x:Name="TeamApplyButton" Content="기본설정 자동 구성 · 실제 설치 검증" FontWeight="SemiBold" Background="#245BBA" Foreground="White" IsEnabled="False"/><Button x:Name="TeamBoardButton" Content="Mattermost 작업보드 열기"/><Button x:Name="TeamOpenButton" Content="연구 채널 열기" IsEnabled="False"/></WrapPanel>
+              <TextBlock Text="Mattermost 왼쪽 ‘연구 작업보드’: 프로젝트·작업·문서·승인 요청·실시간 기록. 한국어 보드·NST 브랜딩 플러그인은 기본설정 과정에서 자동 설치됩니다." TextWrapping="Wrap" Margin="0,8,0,0"/>
+              <WrapPanel><Button x:Name="TeamPluginsButton" Content="설치된 연구팀에 보드·NST만 연결 (S1 재실행 없음)"/></WrapPanel>
               <TextBlock Text="네 봇·토큰 → 전체 페르소나 → 개인 Gateway와 분리 → 독립 실행기 → 실제 S1·S2·S3 검증. 기존 서버·봇은 재사용하며, 검증을 통과하기 전에는 완료로 표시하지 않습니다." TextWrapping="Wrap" Margin="0,10,0,8"/>
               <TextBlock x:Name="QuickSetupSummary" TextWrapping="Wrap" Foreground="#334B6E" Margin="0,0,0,10"/>
               <DockPanel Margin="0,0,0,10"><TextBlock Text="관리자 비밀번호" VerticalAlignment="Center" Margin="0,0,12,0"/><PasswordBox x:Name="TeamAdminPassword" Width="250" HorizontalAlignment="Left" AutomationProperties.Name="봇 발급용 관리자 비밀번호"/><TextBlock Text="  1단계 입력은 이 창에서만 이어집니다." Foreground="#56657D" VerticalAlignment="Center"/></DockPanel>
               <CheckBox x:Name="ModelEgressConsent" Margin="0,0,0,6"><TextBlock Text="선택한 모델로 작업·논문 내용을 보내는 데 동의합니다. 실제 설치 검증은 모델 사용량을 소모합니다." TextWrapping="Wrap"/></CheckBox>
               <CheckBox x:Name="PublicWebConsent" Margin="0,0,0,6"><TextBlock Text="문헌 조사·인용 검증의 공개 웹 검색·원문 읽기를 허용합니다. 비공개 자료를 검색어로 보내지 않습니다." TextWrapping="Wrap"/></CheckBox>
-              <CheckBox x:Name="TeamConsent"><TextBlock Text="위 설정으로 네 프로필·자동 실행 서비스를 구성하고, 실제 모델·봇으로 S1·S2·S3을 연구 채널에서 검증하는 데 동의합니다. 결과·감사·첨부 확인 전에는 사용 준비 완료로 표시하지 않습니다." TextWrapping="Wrap"/></CheckBox>
+              <CheckBox x:Name="TeamConsent"><TextBlock Text="위 설정으로 네 프로필·자동 실행 서비스와 보드·NST 플러그인을 구성하고, 실제 모델·봇으로 S1·S2·S3을 검증하는 데 동의합니다. 플러그인 적용 중 Mattermost가 잠시 재시작됩니다. 결과·감사·첨부 확인 전에는 사용 준비 완료로 표시하지 않습니다." TextWrapping="Wrap"/></CheckBox>
             </StackPanel>
           </Border>
           <Expander x:Name="TeamAdvancedSettings" Header="세부 설정 보기·변경 (역할·이름·토큰·모델·작업 폴더·실행 한도)" IsExpanded="False" Margin="0,0,0,10"><StackPanel Margin="0,12,0,0">

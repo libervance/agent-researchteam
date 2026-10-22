@@ -1,6 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-    [ValidateSet('Diagnose', 'Plan', 'Install', 'Verify', 'Setup', 'CodexStatus', 'CodexAuth', 'LabSetup', 'MattermostSetup', 'DockerStatus', 'DockerInstall', 'AdminPreflight', 'AdminSetup', 'AdminBotSetup', 'ResearchTeamSetup', 'Bundle')]
+    [ValidateSet('Diagnose', 'Plan', 'Install', 'Verify', 'Setup', 'CodexStatus', 'CodexAuth', 'LabSetup', 'MattermostSetup', 'DockerStatus', 'DockerInstall', 'AdminPreflight', 'AdminSetup', 'AdminBotSetup', 'ResearchTeamSetup', 'ResearchPluginsSetup', 'Bundle')]
     [string]$Action = 'Diagnose',
     [string]$HermesHome,
     [string]$InstallDir,
@@ -81,7 +81,7 @@ $eventCallback = {
 
 try {
     $common = @{ HermesHome = $HermesHome; InstallDir = $InstallDir; RuntimeRoot = $RuntimeRoot }
-    if ($UseExistingHermes -and $Action -cnotin @('CodexStatus', 'ResearchTeamSetup')) {
+    if ($UseExistingHermes -and $Action -cnotin @('CodexStatus', 'ResearchTeamSetup', 'ResearchPluginsSetup')) {
         throw '기존 Hermes 사용 모드에서는 인증 확인과 연구팀 연결만 허용합니다. 설치·업데이트·새 로그인은 실행하지 않습니다.'
     }
     switch ($Action) {
@@ -195,6 +195,13 @@ try {
                 $inputData = $null
                 if (Test-Path -LiteralPath $inputPath -PathType Leaf) { Remove-Item -LiteralPath $inputPath -Force -ErrorAction SilentlyContinue }
             }
+        }
+        'ResearchPluginsSetup' {
+            $paths = Get-HermesDefaultPaths @common
+            $result = Invoke-HermesResearchPluginsSetup -RuntimeRoot $paths.RuntimeRoot -Apply:$Apply -ProgressCallback $eventCallback
+            if ($JsonEvents) {
+                & $eventCallback ([pscustomobject]@{type='complete';state='succeeded';percent=100;message='Mattermost 작업보드·NST 연결 완료. 기존 연구팀과 검증 기록을 유지했습니다.';data=$result})
+            } else { Write-ResultObject $result }
         }
         'ResearchTeamSetup' {
             if (-not $Apply) { throw (New-Object System.InvalidOperationException '연구팀 생성·변경은 -Apply 승인이 필요합니다.') }

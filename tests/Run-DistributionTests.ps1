@@ -27,6 +27,16 @@ try {
         $root = Join-Path $extract $name
         Assert (Test-Path -LiteralPath (Join-Path $root $package.EntryPoint)) 'Role-specific launcher exists'
         Assert ((Test-Path -LiteralPath (Join-Path $root 'src/HermesEasySetup.Docker.psm1')) -and (Test-Path -LiteralPath (Join-Path $root 'config/docker-desktop.json'))) 'Docker discovery and verified-download pin included'
+        if ($package.Kind -cin @('Research','Admin')) {
+            $pluginPin=Get-Content -LiteralPath (Join-Path $root 'config/mattermost-plugins.json') -Raw -Encoding UTF8|ConvertFrom-Json
+            foreach($plugin in $pluginPin.packages){
+                $pluginFile=Join-Path $root ('assets/mattermost-plugins/'+$plugin.file)
+                Assert ((Get-FileHash -LiteralPath $pluginFile -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $plugin.sha256) ('Pinned Mattermost plugin in '+$package.Kind+': '+$plugin.id)
+            }
+            Assert ((Get-FileHash -LiteralPath (Join-Path $root $pluginPin.bridge.path) -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $pluginPin.bridge.sha256) ('Pinned read-only bridge in '+$package.Kind)
+        } else {
+            Assert (-not (Test-Path -LiteralPath (Join-Path $root 'assets/mattermost-plugins'))) 'User package does not carry server plugins'
+        }
         $hashes = [IO.File]::ReadAllLines((Join-Path $root 'FILES.sha256'))
         foreach ($line in $hashes) {
             if ($line -notmatch '^([a-f0-9]{64})  ([^\r\n]+)$') { throw 'Malformed file manifest' }

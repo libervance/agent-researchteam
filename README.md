@@ -1,15 +1,16 @@
-# Hermes Research Setup 0.18.0 — 한국어 작업 보드 · 3+1 프리릴리스
+# Hermes Research Setup 0.19.0 — Mattermost 내부 한국어 작업보드 · 3+1 프리릴리스
 
 Windows용 연구팀 설치 마법사의 현재 개발 버전입니다. 기존 3+1·전체 페르소나·강제 감사를 유지합니다.
-최신 후보의 전체 실설치 검증은 사용자 요청으로 중단했으므로, 검증 완료된 정식 배포본으로 표시하지 않습니다.
-구후보의 실제 통과 기록과 최신 후보의 검증 상태는 [0.18.0 검증 범위](docs/verification-0.18.0.md)에서 구분합니다.
+0.19.0은 작업보드·NST 브랜딩 플러그인 자동 설치를 추가한 개발 버전입니다. 새 PC의 전체 설치 검증 완료를 보증하지 않습니다.
+기존 설치의 S1·S2·S3 통과 기록은 보존하며, 플러그인 추가 적용은 연구팀 교체나 실모델 검증을 재실행하지 않습니다.
 
-별도 한국어 웹 보드에서 프로젝트·작업 카드·결과 문서·승인 요청과 실제 도구 행동 기록을 봅니다.
+Mattermost 왼쪽 **연구 작업보드**에서 프로젝트·작업 카드·결과 문서·승인 요청과 실제 도구 행동 기록을 봅니다.
 Mattermost에는 접수·중요 문제·사용자 확인·최종 결과만 간단히 보고합니다.
-마법사 3단계의 **실시간 작업 보드 열기** 또는 작업 폴더의 `Research Board.url`로 엽니다.
+기본설정 버튼이 한국어 보드와 NST 브랜딩을 자동 설치합니다. 기존 팀은 **보드·NST만 연결**로 적용할 수 있습니다.
+마법사 3단계의 **Mattermost 작업보드 열기** 또는 작업 폴더의 `Mattermost Research Board.url`로도 엽니다.
 화면 구성은 제공받은 포크의 흰색·초록색 카드 보드를 기준으로 했습니다.
 설치 검증과 실제 연구 프로젝트는 별도 화면이며, 보드를 열었다고 설치 검증이 통과하지 않습니다.
-자세한 범위는 [한국어 보드 안내](docs/research-board.ko.md)를 확인하세요.
+설치·접근 권한·복구 방식은 [Mattermost 플러그인 안내](docs/mattermost-plugins.ko.md)를 확인하세요.
 
 ## 실행
 
@@ -31,7 +32,7 @@ Mattermost에는 접수·중요 문제·사용자 확인·최종 결과만 간�
 - 실제 S1·S2·S3 증거가 없으면 설치 완료로 표시하지 않습니다.
 
 [설치 순서](docs/research-guide.ko.md) · [실행 구조와 권한](docs/research-team.md) ·
-[이번 수정·검증 범위](docs/verification-0.18.0.md) · [이전 실제 비교](docs/verification-0.17.1.md) ·
+[이번 수정·검증 범위](docs/verification-0.19.0.md) · [이전 실제 비교](docs/verification-0.17.1.md) ·
 [초기 조합 기록](docs/0.17-local-candidate.ko.md)
 
 기존 사용자용 `Start-HermesEasySetup.cmd`와 관리자용 `Start-HermesAdminSetup.cmd`도 유지했습니다.
