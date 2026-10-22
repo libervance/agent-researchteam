@@ -1168,7 +1168,7 @@ try {
     $pathPolicyReason = & $installEngineModule { Get-HermesMvpPolicyStageSkipReason -Stage 'path' }
     Assert-True (-not [string]::IsNullOrWhiteSpace($nodeDepsPolicyReason) -and [string]::IsNullOrWhiteSpace($pathPolicyReason)) 'v0.1.2 policy skips only optional node-deps'
 
-    $contract = Get-Content -Raw (Join-Path $projectRoot 'config\hermes-manifest.json') | ConvertFrom-Json
+    $contract = Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'config\hermes-manifest.json') | ConvertFrom-Json
     function New-TestManifest([bool]$Desktop) {
         $stages = @()
         foreach ($name in @($contract.baseStages)) {
@@ -1251,19 +1251,19 @@ try {
     Assert-True ($entries -notcontains 'config.yaml') 'diagnostic bundle excludes config.yaml'
     Assert-True ($entries -contains 'preflight.json') 'diagnostic bundle includes preflight summary'
 
-    [xml]$xaml = Get-Content -Raw (Join-Path $projectRoot 'ui\ResearchWindow.xaml')
+    [xml]$xaml = Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'ui\ResearchWindow.xaml')
     Assert-True ($null -ne $xaml.DocumentElement) 'GUI XAML is well-formed XML'
-    $xamlText = Get-Content -Raw (Join-Path $projectRoot 'ui\ResearchWindow.xaml')
+    $xamlText = Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'ui\ResearchWindow.xaml')
     Assert-True ($xamlText -match 'x:Name="HermesConsent"') 'GUI has explicit approval control'
     Assert-True ($xamlText -match 'x:Name="HermesInstallButton"[^>]*IsEnabled="False"') 'GUI install starts disabled'
     Assert-True ($xamlText -match 'x:Name="TeamTab"') 'GUI includes the 3+1 research team setup tab'
     Assert-True ($xamlText -match 'x:Name="ModelCombo"') 'GUI includes an in-wizard Codex model selector'
     Assert-True ($xamlText -match 'x:Name="AuthCode"' -and $xamlText -match 'x:Name="AuthOpenButton"') 'GUI displays the Codex device code and fixed browser action'
     Assert-True ($xamlText -notmatch 'Nous Portal|OpenRouter|Discord|Slack|Telegram|Spotify') 'GUI excludes unrelated provider and messaging setup choices'
-    $codexModuleText = Get-Content -Raw (Join-Path $projectRoot 'src\HermesEasySetup.Codex.psm1')
+    $codexModuleText = Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'src\HermesEasySetup.Codex.psm1')
     Assert-True ($codexModuleText -match "PYTHONUNBUFFERED.*=.*'1'" -and $codexModuleText -match "-Type 'oauth'") 'Codex OAuth streams its device code to a dedicated wizard event'
     Assert-True ($codexModuleText -match 'Test-HermesInstallation[^\r\n]+-StaticOnly' -and $codexModuleText -match '\$verification\.StaticProvenanceValid') 'Codex status refresh uses static provenance and never blocks on Hermes doctor'
-    $inputModuleText = Get-Content -Raw (Join-Path $projectRoot 'src\HermesEasySetup.Input.psm1')
+    $inputModuleText = Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'src\HermesEasySetup.Input.psm1')
     Assert-True ($inputModuleText -match 'HermesEasySetup.LabInput.v1') 'NST input retains the original credential encryption contract'
     $labInputPath = Join-Path $testRootFull 'lab-input.bin'
     $labInput = [pscustomobject]@{ ProfileName = 'albus'; MattermostToken = 'lab-secret-token'; DashboardPassword = 'lab-secret-password' }

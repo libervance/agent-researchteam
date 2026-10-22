@@ -16,6 +16,6 @@
   ],
   "bridge": {
     "path": "plugins/research-board/bridge.py",
-    "sha256": "e4eaf4d99c9ae079c4e552c20dad803c4af223da7bccb9bcf88d3fb87460bcbf"
+    "sha256": "c51694a62bad84d3363768240c694dcc93f2baede5f1878af783004ab7a20fe5"
   }
 }

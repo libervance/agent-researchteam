@@ -5,7 +5,7 @@ Windows PC에 Mattermost·Hermes·총괄/조사/분석/감사 3+1 연구팀을 �
 
 ## 실행
 
-[저장소](https://github.com/harrypotter8473/agent-researchteam-easysetup)의 NST 연구팀 ZIP 전체를 새 폴더에 풀고 `Start-HermesResearchSetup.cmd`를 실행합니다.
+[저장소](https://github.com/libervance/agent-researchteam)의 NST 연구팀 ZIP 전체를 새 폴더에 풀고 `Start-HermesResearchSetup.cmd`를 실행합니다.
 순서는 **로컬 서버 → Hermes·모델 연결 → 기본설정 자동 구성·실제 설치 검증**입니다.
 모델·웹 전송과 실제 검증 동의는 사용자가 확인하며, 네 봇·토큰·페르소나·실행기·보드는 한 버튼으로 구성합니다.
 
